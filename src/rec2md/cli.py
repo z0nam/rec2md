@@ -26,8 +26,8 @@ def log(msg: str) -> None:
 def run_one(src: Path, args) -> Path:
     out_dir = Path(args.out) if args.out else src.parent
     out_dir.mkdir(parents=True, exist_ok=True)
-    stem = out_dir / src.stem
-    seg_path, raw_path = stem.with_suffix(".segments.json"), stem.with_suffix(".raw.md")
+    # with_suffix는 "meeting.v1"의 ".v1"을 확장자로 보고 갈아끼우므로 이름 뒤에 덧붙인다
+    seg_path, raw_path = out_dir / f"{src.stem}.segments.json", out_dir / f"{src.stem}.raw.md"
 
     duration = audio.probe_duration(src)
     log(f"{src.name} ({fmt_ts(duration)})")

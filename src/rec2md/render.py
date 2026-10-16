@@ -37,7 +37,8 @@ def render_raw(t: Transcript, title: str) -> str:
         text = s.text.strip()
         if not text:
             continue
-        if s.speaker != cur_spk:
+        # 화자 정보가 없으면(--no-diarize) 세그먼트마다 끊어 타임스탬프를 살린다
+        if s.speaker != cur_spk or s.speaker is None:
             flush()
             cur_spk, cur_start, buf = s.speaker, s.start, []
         buf.append(text)
