@@ -11,7 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from . import audio
-from .clean import collapse_repeats
+from .clean import collapse_repeats, drop_known_hallucinations
 from .engines import get_engine
 from .render import fmt_ts, render_raw
 from .segments import Transcript
@@ -35,20 +35,26 @@ def run_one(src: Path, args) -> Path:
     with tempfile.TemporaryDirectory(prefix="rec2md-") as td:
         wav = audio.normalize(src, Path(td) / "audio.wav")
 
-        t0 = time.monotonic()
-        engine = get_engine(args.engine, model=args.model)
-        segs = collapse_repeats(engine.transcribe(wav, args.language))
-        meta["asr_sec"] = round(time.monotonic() - t0, 1)
-        log(f"전사 {meta['asr_sec']}s (실시간 대비 {duration / max(meta['asr_sec'], 0.1):.1f}배)")
-
+        turns = regions = None
         if not args.no_diarize:
-            from .diarize import PIPELINE, assign_speakers, diarize
+            from .diarize import PIPELINE, assign_speakers, diarize, speech_regions
             t0 = time.monotonic()
             turns = diarize(wav, args.speakers)
-            segs = assign_speakers(segs, turns)
             meta["diarizer"] = PIPELINE.split("/")[-1]
             meta["diarize_sec"] = round(time.monotonic() - t0, 1)
             log(f"화자분리 {meta['diarize_sec']}s")
+            # 화자분리가 찾은 말소리 구간만 전사한다(VAD 겸용)
+            regions = None if args.no_vad else speech_regions(turns)
+
+        t0 = time.monotonic()
+        engine = get_engine(args.engine, model=args.model)
+        segs = drop_known_hallucinations(collapse_repeats(engine.transcribe(wav, args.language, regions)))
+        meta["asr_sec"] = round(time.monotonic() - t0, 1)
+        meta["vad"] = regions is not None
+        log(f"전사 {meta['asr_sec']}s (실시간 대비 {duration / max(meta['asr_sec'], 0.1):.1f}배)")
+
+        if turns is not None:
+            segs = assign_speakers(segs, turns)
 
     t = Transcript(source=src.name, duration=duration, engine=f"{engine.name}:{getattr(engine, 'model', '')}",
                    language=args.language, segments=segs, meta=meta)
@@ -66,7 +72,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--model", help="엔진별 모델 (local 기본: whisper-large-v3-turbo)")
     p.add_argument("--language", default="ko")
     p.add_argument("--speakers", type=int, help="화자 수를 알면 지정 (정확도 향상)")
-    p.add_argument("--no-diarize", action="store_true", help="화자분리 생략")
+    p.add_argument("--no-diarize", action="store_true", help="화자분리 생략 (말소리 구간 청킹도 같이 꺼짐)")
+    p.add_argument("--no-vad", action="store_true", help="말소리 구간 청킹 없이 파일 전체를 한 번에 전사")
     p.add_argument("--out", help="출력 폴더 (기본: 원본 옆)")
     args = p.parse_args(argv)
 

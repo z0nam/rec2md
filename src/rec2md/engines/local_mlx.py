@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..audio import SAMPLE_RATE, load_wav
 from ..segments import Segment, Word
-from .base import Engine
+from .base import Engine, Region
 
 DEFAULT_MODEL = "mlx-community/whisper-large-v3-turbo"
+PAD = 0.2  # 구간 앞뒤로 붙이는 여유(초). 첫 음절이 잘리지 않게
 
 
 class LocalMLX(Engine):
@@ -16,14 +18,11 @@ class LocalMLX(Engine):
     def __init__(self, model: str | None = None):
         self.model = model or DEFAULT_MODEL
 
-    def transcribe(self, wav: Path, language: str) -> list[Segment]:
-        try:
-            import mlx_whisper
-        except ImportError as e:
-            raise SystemExit("local 엔진은 Apple Silicon Mac + mlx-whisper가 필요함. Windows는 --remote studio 사용") from e
+    def _decode(self, audio, language: str, offset: float) -> list[Segment]:
+        import mlx_whisper
 
         result = mlx_whisper.transcribe(
-            str(wav),
+            audio,
             path_or_hf_repo=self.model,
             language=language,
             word_timestamps=True,
@@ -37,6 +36,31 @@ class LocalMLX(Engine):
         )
         segs = []
         for s in result["segments"]:
-            words = [Word(w["start"], w["end"], w["word"], prob=w.get("probability", 1.0)) for w in s.get("words", [])]
-            segs.append(Segment(start=s["start"], end=s["end"], text=s["text"].strip(), words=words))
+            words = [Word(w["start"] + offset, w["end"] + offset, w["word"], prob=w.get("probability", 1.0))
+                     for w in s.get("words", [])]
+            segs.append(Segment(start=s["start"] + offset, end=s["end"] + offset, text=s["text"].strip(), words=words))
+        return segs
+
+    def transcribe(self, wav: Path, language: str, regions: list[Region] | None = None) -> list[Segment]:
+        try:
+            import mlx_whisper  # noqa: F401
+        except ImportError as e:
+            raise SystemExit("local 엔진은 Apple Silicon Mac + mlx-whisper가 필요함. Windows는 --remote studio 사용") from e
+
+        if not regions:
+            return self._decode(str(wav), language, 0.0)
+
+        # 말소리 구간만 잘라 따로 전사한다. 통째로 넣으면 다화자·원거리 녹음에서
+        # 30초 창 단위로 문장을 건너뛰는 일이 잦다(실측: 클로바 대비 분량 59〜69% → 청킹 후 개선)
+        audio = load_wav(wav)
+        segs: list[Segment] = []
+        prev_b = 0.0
+        for s, e in regions:
+            # 붙어서 쪼개진 청크끼리 패딩이 겹치면 경계 단어가 두 번 전사되므로 앞 청크 끝 이후로 민다
+            a, b = max(prev_b, s - PAD), e + PAD
+            prev_b = b
+            clip = audio[int(a * SAMPLE_RATE):int(b * SAMPLE_RATE)]
+            if len(clip) < SAMPLE_RATE // 2:
+                continue
+            segs += self._decode(clip, language, a)
         return segs
