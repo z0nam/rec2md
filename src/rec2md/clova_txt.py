@@ -19,7 +19,8 @@ from pathlib import Path
 from .segments import Segment, Transcript
 
 _HEAD = re.compile(r"^(?P<spk>.+?) (?P<ts>\d{1,2}:\d{2}(?::\d{2})?)$")
-_DUR = re.compile(r"(?:(\d+)\s*(?:Hours?|시간)\s*)?(?:(\d+)\s*(?:Minutes?|분)\s*)?(\d+)\s*(?:seconds?|초)", re.I)
+_DUR = re.compile(r"(\d+)\s*(Hours?|시간|Minutes?|분|seconds?|초)", re.I)
+_UNIT = {"h": 3600, "시": 3600, "m": 60, "분": 60, "s": 1, "초": 1}
 
 
 def _sec(ts: str) -> float:
@@ -33,8 +34,9 @@ def _sec(ts: str) -> float:
 def parse(path: Path) -> Transcript:
     lines = path.read_text(encoding="utf-8-sig").replace("\r", "").split("\n")
     title = lines[0].strip()
-    m = _DUR.search(lines[1]) if len(lines) > 1 else None
-    duration = (int(m[1] or 0) * 3600 + int(m[2] or 0) * 60 + int(m[3])) if m else 0.0
+    # "・ 9Minutes 1seconds", "・ 17분 34초", "・ 1Hours 5Minutes" 등 일부 단위가 빠질 수 있다
+    tail = lines[1].split("・")[-1] if len(lines) > 1 else ""
+    duration = float(sum(int(n) * _UNIT[u[0].lower()] for n, u in _DUR.findall(tail)))
 
     segs: list[Segment] = []
     cur: Segment | None = None
@@ -49,6 +51,7 @@ def parse(path: Path) -> Transcript:
     for a, b in zip(segs, segs[1:]):
         a.end = b.start
     if segs:
+        duration = duration or segs[-1].start  # 길이를 못 읽으면 마지막 발화 시각으로 대체
         segs[-1].end = max(duration, segs[-1].start)
     return Transcript(source=path.name, duration=duration, engine="clova-note", language="ko",
                       segments=segs, meta={"title": title})

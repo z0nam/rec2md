@@ -54,8 +54,11 @@ class LocalMLX(Engine):
         # 30초 창 단위로 문장을 건너뛰는 일이 잦다(실측: 클로바 대비 분량 59〜69% → 청킹 후 개선)
         audio = load_wav(wav)
         segs: list[Segment] = []
+        prev_b = 0.0
         for s, e in regions:
-            a, b = max(0.0, s - PAD), e + PAD
+            # 붙어서 쪼개진 청크끼리 패딩이 겹치면 경계 단어가 두 번 전사되므로 앞 청크 끝 이후로 민다
+            a, b = max(prev_b, s - PAD), e + PAD
+            prev_b = b
             clip = audio[int(a * SAMPLE_RATE):int(b * SAMPLE_RATE)]
             if len(clip) < SAMPLE_RATE // 2:
                 continue
