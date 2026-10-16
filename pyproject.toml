@@ -1,0 +1,25 @@
+[project]
+name = "rec2md"
+version = "0.1.0"
+description = "녹음·영상 파일을 화자 구분 녹취록 Markdown으로 변환"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "mlx-whisper>=0.4.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+diarize = [
+    "pyannote.audio>=4.0",
+]
+
+[project.scripts]
+rec2md = "rec2md.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rec2md"]
