@@ -13,6 +13,7 @@ class Word:
     end: float
     text: str
     speaker: str | None = None
+    prob: float = 1.0
 
 
 @dataclass

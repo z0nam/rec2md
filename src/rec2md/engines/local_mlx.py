@@ -37,6 +37,6 @@ class LocalMLX(Engine):
         )
         segs = []
         for s in result["segments"]:
-            words = [Word(w["start"], w["end"], w["word"]) for w in s.get("words", [])]
+            words = [Word(w["start"], w["end"], w["word"], prob=w.get("probability", 1.0)) for w in s.get("words", [])]
             segs.append(Segment(start=s["start"], end=s["end"], text=s["text"].strip(), words=words))
         return segs

@@ -1,0 +1,39 @@
+"""엔진 공통 환각 정리."""
+
+from __future__ import annotations
+
+import re
+
+from .segments import Segment
+
+MAX_REPEAT = 3
+
+
+def _norm(t: str) -> str:
+    return re.sub(r"[\s.,!?…]+", "", t)
+
+
+def collapse_repeats(segs: list[Segment]) -> list[Segment]:
+    """같은 토큰이 MAX_REPEAT번 넘게 연달아 나오면 잘라낸다 ("초. 초. 초. 초. …" 같은 디코딩 루프).
+
+    사람도 "네 네 네"는 말하므로 3번까지는 남긴다. 세그먼트 경계를 넘어 이어지는 반복도 센다.
+    """
+    prev, count = None, 0
+    out = []
+    for s in segs:
+        if not s.words:
+            out.append(s)
+            continue
+        kept = []
+        for w in s.words:
+            key = _norm(w.text)
+            count = count + 1 if key and key == prev else 1
+            prev = key
+            if count <= MAX_REPEAT:
+                kept.append(w)
+        if kept:
+            s.words = kept
+            s.text = "".join(w.text for w in kept).strip()
+            s.start, s.end = kept[0].start, kept[-1].end
+            out.append(s)
+    return out
