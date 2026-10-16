@@ -7,6 +7,8 @@ import re
 from .segments import Segment
 
 MAX_REPEAT = 3
+# 디코딩 루프는 단어가 붙어서 나온다. 이보다 길게 끊겼으면 새 발화로 보고 다시 센다
+LOOP_GAP = 1.0
 
 
 def _norm(t: str) -> str:
@@ -18,7 +20,7 @@ def collapse_repeats(segs: list[Segment]) -> list[Segment]:
 
     사람도 "네 네 네"는 말하므로 3번까지는 남긴다. 세그먼트 경계를 넘어 이어지는 반복도 센다.
     """
-    prev, count = None, 0
+    prev, prev_end, count = None, None, 0
     out = []
     for s in segs:
         if not s.words:
@@ -27,8 +29,9 @@ def collapse_repeats(segs: list[Segment]) -> list[Segment]:
         kept = []
         for w in s.words:
             key = _norm(w.text)
-            count = count + 1 if key and key == prev else 1
-            prev = key
+            gap = w.start - prev_end if prev_end is not None else 0.0
+            count = count + 1 if key and key == prev and gap <= LOOP_GAP else 1
+            prev, prev_end = key, w.end
             if count <= MAX_REPEAT:
                 kept.append(w)
         if kept:

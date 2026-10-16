@@ -103,11 +103,10 @@ def _smooth(words: list[Word], max_words: int = 2, max_sec: float = 1.0) -> None
             j += 1
         run = words[i:j]
         short = len(run) <= max_words and run[-1].end - run[0].start <= max_sec
-        # 다음 구간과 바로 붙어 있을 때만(말이 끊긴 뒤의 짧은 대답 "예"는 진짜 화자 교대일 가능성이 큼)
-        glued = i > 0 and run[0].start - words[i - 1].end < 0.3
-        # 앞뒤가 같은 화자일 때만(A-B-C에서 짧은 B는 진짜 발화일 수 있음)
-        sandwiched = j < len(words) and i > 0 and words[j].speaker == words[i - 1].speaker
-        if short and glued and sandwiched:
+        # 앞뒤가 같은 화자이고(A-B-C에서 짧은 B는 진짜 발화일 수 있음) 양쪽 모두와 붙어 있을 때만
+        sandwiched = 0 < i and j < len(words) and words[j].speaker == words[i - 1].speaker
+        glued = sandwiched and run[0].start - words[i - 1].end < 0.3 and words[j].start - run[-1].end < 0.3
+        if short and glued:
             for w in run:
                 w.speaker = words[i - 1].speaker
         i = j
