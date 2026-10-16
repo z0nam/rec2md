@@ -69,6 +69,12 @@ rec2md <audio> [--engine local|rtzr|clova]  # 기본 local [--call] [--speakers 
 - Mac: `brew install ffmpeg`, `uv tool install` 후 mlx-whisper·pyannote 설치. Hugging Face 토큰과 pyannote 모델 약관 동의 필요.
 - Windows에서 Mac으로 SSH 키 접속 확인
 
+## 위시리스트
+- **회의 메모 보정** (2026-10-16 요청): 같은 회의에서 타이핑한 정리물(메모·회의록 초안)이 있으면 녹취를 근거로 보정한다.
+  - 메모를 기준 문서로 두고 녹취에서 빠진 논의·결정·수치, 잘못 적힌 발언자·숫자, 메모에만 있고 녹취엔 없는 주장을 표시.
+  - 반대로 메모의 인명·용어를 STT 오인식 교정 사전으로 활용(녹취록 품질도 같이 올라감).
+  - 형태: `rec2md <audio> --notes <memo.md|docx|hwpx>` → 후처리 단계에서 Claude가 대조. 보정본은 변경 근거(타임스탬프)를 달아 원본 메모와 diff로 볼 수 있게.
+
 ## 2단계 미리보기 (이번 범위 아님)
 `talk2notes`:
 1. 영상을 ffmpeg로 프레임 추출
