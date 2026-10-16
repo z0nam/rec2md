@@ -29,15 +29,10 @@ def diarize(wav: Path, num_speakers: int | None = None) -> list[Turn]:
     if torch.backends.mps.is_available():
         pipe.to(torch.device("mps"))
 
-    import wave
+    from .audio import SAMPLE_RATE, load_wav
 
-    import numpy as np
-
-    # 파일 경로 대신 파형을 넘기면 torchcodec 디코딩 문제를 피한다 (audio.normalize가 만든 16bit mono wav)
-    with wave.open(str(wav), "rb") as f:
-        sr = f.getframerate()
-        data = np.frombuffer(f.readframes(f.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
-    audio = {"waveform": torch.from_numpy(data).unsqueeze(0), "sample_rate": sr}
+    # 파일 경로 대신 파형을 넘기면 torchcodec 디코딩 문제를 피한다
+    audio = {"waveform": torch.from_numpy(load_wav(wav)).unsqueeze(0), "sample_rate": SAMPLE_RATE}
     kw = {"num_speakers": num_speakers} if num_speakers else {}
     out = pipe(audio, **kw)
     # community-1은 겹침 발화를 빼고 한 시점에 한 화자만 남긴 결과를 따로 준다(전사 정렬용)
@@ -50,6 +45,24 @@ LOW_PROB = 0.3
 
 def _overlap(w: Word, turns: list[Turn]) -> float:
     return max((min(e, w.end) - max(s, w.start) for s, e, _ in turns), default=0.0)
+
+
+def speech_regions(turns: list[Turn], max_gap: float = 2.0, max_len: float = 25.0) -> list[tuple[float, float]]:
+    """화자 구간을 화자와 무관하게 이어 붙여 전사용 청크로 만든다.
+
+    2초 미만으로 끊긴 구간은 합치되(짧은 청크도 Whisper는 30초 창 하나 비용이 든다) 한 청크가 25초를 넘지 않게 한다(Whisper 창 30초 이내).
+    원래 25초보다 긴 단일 구간은 그대로 두고 Whisper가 알아서 나눠 처리한다.
+    """
+    out: list[list[float]] = []
+    for s, e, _ in sorted(turns):
+        if out and s - out[-1][1] < max_gap and max(e, out[-1][1]) - out[-1][0] <= max_len:
+            out[-1][1] = max(out[-1][1], e)
+        elif out and s < out[-1][1]:  # 겹침 발화인데 길이 한도를 넘으면 앞 청크 끝부터 이어서
+            if e > out[-1][1]:
+                out.append([out[-1][1], e])
+        else:
+            out.append([s, e])
+    return [(s, e) for s, e in out]
 
 
 def _speaker_at(w: Word, turns: list[Turn]) -> str | None:

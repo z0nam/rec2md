@@ -40,3 +40,18 @@ def collapse_repeats(segs: list[Segment]) -> list[Segment]:
             s.start, s.end = kept[0].start, kept[-1].end
             out.append(s)
     return out
+
+
+# Whisper가 무음·잡음에서 자주 지어내는 문구(방송 자막으로 학습된 흔적). 세그먼트가 이것뿐이면 버린다
+_KNOWN = [
+    "시청해주셔서감사합니다", "구독과좋아요", "구독좋아요", "촬영기자", "영상편집", "자막제공",
+    "MBC뉴스", "KBS뉴스", "SBS뉴스", "뉴스를마칩니다", "다음영상에서만나요",
+]
+
+
+def drop_known_hallucinations(segs: list[Segment]) -> list[Segment]:
+    def bogus(s: Segment) -> bool:
+        t = _norm(s.text)
+        return len(t) <= 20 and any(k in t for k in _KNOWN)
+
+    return [s for s in segs if not bogus(s)]

@@ -25,6 +25,16 @@ def probe_duration(path: Path) -> float:
     return float(json.loads(out)["format"]["duration"])
 
 
+def load_wav(path: Path):
+    """normalize()가 만든 16bit mono wav → float32 numpy 배열."""
+    import wave
+
+    import numpy as np
+
+    with wave.open(str(path), "rb") as f:
+        return np.frombuffer(f.readframes(f.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
+
+
 def normalize(src: Path, dst: Path) -> Path:
     """첫 번째 오디오 스트림만 뽑아 16kHz mono PCM wav로 저장. 영상이면 화면은 버린다."""
     subprocess.run(

@@ -1,0 +1,54 @@
+"""클로바노트 txt 내보내기 → Transcript (품질 비교용 기준점).
+
+형식:
+    <제목>
+    2026.10.16 Fri AM 10:50 ・ 9Minutes 1seconds
+    <참석자 목록>
+
+    <화자> 00:00
+    <발화(여러 줄 가능)>
+
+클로바 txt에는 발화 시작 시각만 있으므로 끝 시각은 다음 발화 시작으로 채운다.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from .segments import Segment, Transcript
+
+_HEAD = re.compile(r"^(?P<spk>.+?) (?P<ts>\d{1,2}:\d{2}(?::\d{2})?)$")
+_DUR = re.compile(r"(?:(\d+)\s*(?:Hours?|시간)\s*)?(?:(\d+)\s*(?:Minutes?|분)\s*)?(\d+)\s*(?:seconds?|초)", re.I)
+
+
+def _sec(ts: str) -> float:
+    parts = [int(x) for x in ts.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0)
+    h, m, s = parts
+    return h * 3600 + m * 60 + s
+
+
+def parse(path: Path) -> Transcript:
+    lines = path.read_text(encoding="utf-8-sig").replace("\r", "").split("\n")
+    title = lines[0].strip()
+    m = _DUR.search(lines[1]) if len(lines) > 1 else None
+    duration = (int(m[1] or 0) * 3600 + int(m[2] or 0) * 60 + int(m[3])) if m else 0.0
+
+    segs: list[Segment] = []
+    cur: Segment | None = None
+    for line in lines[3:]:
+        h = _HEAD.match(line.strip())
+        # 화자 줄은 빈 줄 뒤에 오지만, 발화 중간에 "이름 00:00" 꼴 문장이 섞일 일은 거의 없다
+        if h:
+            cur = Segment(start=_sec(h["ts"]), end=0.0, text="", speaker=h["spk"])
+            segs.append(cur)
+        elif cur is not None and line.strip():
+            cur.text = f"{cur.text} {line.strip()}".strip()
+    for a, b in zip(segs, segs[1:]):
+        a.end = b.start
+    if segs:
+        segs[-1].end = max(duration, segs[-1].start)
+    return Transcript(source=path.name, duration=duration, engine="clova-note", language="ko",
+                      segments=segs, meta={"title": title})
