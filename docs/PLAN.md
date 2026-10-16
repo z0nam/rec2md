@@ -10,15 +10,15 @@
 
 ## 실행 환경 (2026-10-16 결정)
 - **개발 거점은 studio(Mac, `~/dev/rec2md`)** — ~/dev 프로젝트 지도·라우팅 규약이 있는 메인 작업공간이고, local 엔진(mlx)이 네이티브로 돈다. ffmpeg·uv·claude 설치돼 있음.
-- **namun-ji(Windows)**: 녹음기(E:\REC_DIR)가 꽂히는 곳. GTX 1060 3GB라 로컬 STT 부적합. CLI를 `uv tool install`로 설치해 클라우드 엔진 호출·일괄 업로드용으로 씀. ffmpeg는 winget으로 설치 완료(9.0.2).
-- **local 엔진**: studio에서 `mlx-whisper` large-v3(또는 turbo) + pyannote community-1(MPS). 외부 전송 없음 → 민감 녹취·백로그용.
+- **namun-ji(Windows)**: 녹음기(E:\REC_DIR)가 꽂히는 곳. GTX 1060 3GB라 로컬 STT 부적합. CLI를 `uv tool install`로 설치해 녹음기 파일을 studio로 보내는(`--remote studio`) 입구로 씀. 클라우드 엔진도 여기서 직접 호출 가능. ffmpeg는 winget으로 설치 완료(9.0.2).
+- **local 엔진**: studio에서 `mlx-whisper` large-v3(또는 turbo) + pyannote community-1(MPS). 외부 전송 없음, 추가 비용 없음 → **기본 엔진**.
 - E:는 녹음기 마운트라 상시 접근 불가 → 개발용 샘플은 `samples/`(gitignore)에 복사해 둠.
 
 ## 접근
 엔진을 플러그인처럼 갈아끼우는 Python CLI로 만들고, Claude가 정리와 요약을 맡는다.
 
 ```
-rec2md <audio> [--engine rtzr|clova|local] [--call] [--speakers N] [--remote studio]
+rec2md <audio> [--engine local|rtzr|clova]  # 기본 local [--call] [--speakers N] [--remote studio]
   1. ffmpeg로 정규화 (16kHz mono wav)
   2. 엔진 호출 → 공통 스키마 segments.json
      [{start, end, speaker, text}]
@@ -31,25 +31,26 @@ rec2md <audio> [--engine rtzr|clova|local] [--call] [--speakers N] [--remote stu
 ### 엔진
 | 엔진 | 용도 | 비고 |
 |---|---|---|
-| `rtzr` (기본 후보) | 일반 회의·전화 | 시간당 약 1,000원, 처음 10시간 무료, `domain=CALL`(전화), 화자분리, 4h/2GB |
-| `clova` | 정확도 비교·대체 | CLOVA Speech 장문 비동기 API, NCP 계정 필요 |
-| `local` | 민감 녹취 | Mac에서 mlx-whisper와 pyannote 사용. VAD(무음 구간 필터링)를 켜서 무음 구간에 엉뚱한 문장이 생기는 문제 방지 |
+| `local` (**기본**) | 백로그·일상 녹취 전부 | studio에서 mlx-whisper + pyannote. VAD(무음 구간 필터링)로 무음 구간 환각 방지. 비용·시간 제한 없음 |
+| `rtzr` | 품질 기준점·보조 | 계정당 무료 10시간을 파일럿 비교에 사용. 이후 시간당 약 1,000원. `domain=CALL`(전화), 화자분리, 4h/2GB |
+| `clova` | 품질 기준점·보조 | CLOVA Speech 장문 API(클로바노트와 같은 계열 엔진, 클로바노트 앱 한도와는 별개). NCP 가입·결제 필요, 단가는 콘솔 확인 |
 
 - `--remote studio`: Windows에서 `scp`로 파일을 studio에 보내고, `ssh studio rec2md --engine local`을 실행한 뒤 결과 json을 회수한다.
-- **방침: 클라우드 우선, 로컬은 백업.** 기본은 클라우드 엔진(rtzr 또는 clova)으로 처리한다. 로컬(Mac)은 민감한 녹취이거나 클라우드가 실패·한도 초과일 때만 쓴다.
-- rtzr과 clova 중 무엇을 기본으로 할지는 **파일럿으로 결정**한다. 같은 녹취 2~3건(회의 1, 전화 1)으로 비교하고, local도 백업 품질 확인용으로 함께 돌림.
+- **방침: 로컬 우선, 클라우드는 기준점·보조** (2026-10-16 변경). 처음엔 클라우드 우선이었으나, studio가 로컬 엔진을 충분히 돌릴 수 있고 클라우드 무료 한도(RTZR 계정당 10시간)로는 188시간 백로그를 감당할 수 없어 뒤집음.
+- 클라우드는 (1) 파일럿에서 로컬 품질을 재는 기준점, (2) 로컬이 크게 밀리는 유형(전화·잡음 현장 등)에 한해 선택 사용.
+- 파일럿: 같은 녹취 2〜3건(회의 1, 전화 1)을 local과 rtzr(무료 한도 내), 가능하면 clova로 돌려 비교. 로컬 처리속도(실시간 대비 배수)도 실측.
 
 ### 일괄 처리 (기존 녹취 백로그)
 - `E:\REC_DIR` 실측(2026-10-16): MP3 167개, 10.1GB, **총 188.5시간**, 전부 128kbps. 파일별 목록은 `local/backlog-durations.tsv`(gitignore — 파일명에 인명·회의명 포함).
   - 30초 미만 빈 파일 15개 → 건너뜀.
-  - **4시간 초과 8개**(최장 360분) → RTZR 4h 제한 때문에 무음 지점 기준 분할 후 이어붙이기 필요(화자 라벨은 청크 간 불연속 — 정리 단계에서 Claude가 맞춤).
+  - **4시간 초과 8개**(최장 360분) → local은 메모리 관리를 위해, 클라우드는 RTZR 4h 제한 때문에 무음 지점 기준 분할 후 이어붙이기 필요(화자 라벨은 청크 간 불연속 — 정리 단계에서 Claude가 맞춤).
   - `YYYYMMDD_주제.MP3`로 이름 붙인 파일과 `REC000NN.MP3`가 섞여 있음. `REC000NN`은 녹음기 시계가 없어 수정일 1601년 → 날짜·주제는 내용에서 추론.
 - `rec2md batch <dir> [--engine ...] [--dry-run]`
   - `--dry-run`: ffprobe로 총 재생시간과 엔진별 예상 비용 출력.
   - 처리한 파일은 상태 파일(`.rec2md-state.json`)에 기록해 건너뜀 → 중단 후 재개 가능.
   - 출력은 `<dir>/_transcripts/`에 모음.
 - `REC000NN` 파일: 요약 기반으로 `YYYYMMDD?_주제` 제목을 제안하는 `index.md` 생성. 실제 파일명 변경은 사용자 확인 후.
-- 비용: RTZR 기준 188시간 ≈ 18〜19만원(처음 10시간 무료). 백로그는 studio local로 밤새 무료 처리하고 새 녹취는 클라우드로 하는 분담도 선택지 — 파일럿 품질 비교 후 결정.
+- 비용: 백로그는 studio local로 처리(추가 비용 없음, 처리시간은 파일럿 실측 후 산정). 참고로 RTZR로 전부 돌리면 188시간 ≈ 18〜19만원.
 
 ### 패키징 (기존 `gw` 패턴 재사용)
 - uv 패키지, `[project.scripts] rec2md = "rec2md.cli:main"`, 설치는 `uv tool install --editable` (참고: namun-ji `ji-gw-ai/pyproject.toml`).
@@ -63,7 +64,8 @@ rec2md <audio> [--engine rtzr|clova|local] [--call] [--speakers N] [--remote stu
 
 ### 선행 작업
 - ~~Windows: `winget install Gyan.FFmpeg`~~ 완료
-- RTZR 개발자 가입 (무료 600분)
+- (선택) RTZR 개발자 가입 — 무료 600분을 파일럿 기준점으로 사용
+- (선택) NCP CLOVA Speech 도메인 생성, 콘솔에서 단가·무료 크레딧 확인
 - Mac: `brew install ffmpeg`, `uv tool install` 후 mlx-whisper·pyannote 설치. Hugging Face 토큰과 pyannote 모델 약관 동의 필요.
 - Windows에서 Mac으로 SSH 키 접속 확인
 
@@ -81,6 +83,6 @@ rec2md <audio> [--engine rtzr|clova|local] [--call] [--speakers N] [--remote stu
 
 ## 검증
 1. 짧은 샘플(1~2분)로 엔진마다 `rec2md sample.m4a --engine X`를 실행해 segments.json 스키마가 맞고 화자 라벨이 붙는지 확인.
-2. 실제 회의 녹취(30~60분)와 전화 녹취 각 1건으로 엔진 3개를 비교한다. 비교 항목은 인명·전문용어 오인식, 화자 혼동, 처리시간, 비용이고, 표로 정리해서 기본 엔진을 정함.
+2. 실제 회의 녹취(30~60분)와 전화 녹취 각 1건으로 엔진 3개를 비교한다. 비교 항목은 인명·전문용어 오인식, 화자 혼동, 처리시간, 비용이고, 표로 정리해서 local 기본 유지 여부와 클라우드를 쓸 유형을 정함.
 3. Claude Code에서 "이 녹취 풀어줘 <경로>"라고 하면 스킬이 트리거되어 녹취록.md와 요약까지 한 번에 나오는지 확인.
 4. Windows에서 `--remote studio` 왕복이 동작하는지 확인.
