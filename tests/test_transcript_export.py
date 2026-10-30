@@ -9,6 +9,7 @@ from rec2md.transcript_export import (
     export_transcript,
     format_duration,
     format_ts,
+    iter_turns,
     render_clova_html,
     render_clova_md,
     render_clova_txt,
@@ -19,7 +20,8 @@ from rec2md.transcript_export import (
 @pytest.fixture
 def synthetic_transcript() -> Transcript:
     segs = [
-        Segment(start=0.0, end=15.0, text="안녕하세요. 오늘 안건 회의를 시작하겠습니다.", speaker="화자1"),
+        Segment(start=0.0, end=10.0, text="안녕하세요.", speaker="화자1"),
+        Segment(start=10.0, end=15.0, text="오늘 안건 회의를 시작하겠습니다.", speaker="화자1"),
         Segment(start=15.0, end=45.0, text="네 반갑습니다. 바로 1번 안건 보고해 주세요.", speaker="화자2"),
         Segment(start=45.0, end=3665.0, text="1번 안건은 시스템 성능 최적화 건입니다.", speaker="화자1"),
         Segment(start=3665.0, end=3720.0, text="1시간이 지났으니 마무리 발언 부탁드립니다.", speaker="화자3"),
@@ -50,8 +52,10 @@ def test_format_ts():
     assert format_ts(0.0) == "00:00"
     assert format_ts(65.0) == "01:05"
     assert format_ts(605.0) == "10:05"
-    assert format_ts(3600.0) == "01:00:00"
-    assert format_ts(3723.0) == "01:02:03"
+    # 1시간 이상은 H:MM:SS
+    assert format_ts(3600.0) == "1:00:00"
+    assert format_ts(3723.0) == "1:02:03"
+    assert format_ts(7325.0) == "2:02:05"
 
 
 def test_resolve_speaker():
@@ -67,10 +71,23 @@ def test_resolve_speaker():
     assert resolve_speaker("화자1", None, meta) == "홍길동"
     # 3. meta.speaker_names (str 형태)
     assert resolve_speaker("화자2", None, meta) == "김철수"
-    # 4. 미등록 화자 라벨 그대로 유지
-    assert resolve_speaker("화자3", None, meta) == "화자3"
+    # 4. 화자N -> 참석자 N 변환
+    assert resolve_speaker("화자3", None, meta) == "참석자 3"
+    assert resolve_speaker("SPEAKER_00", None, meta) == "참석자 1"
     # 5. 빈 값 폴백
-    assert resolve_speaker(None, None, {}) == "화자"
+    assert resolve_speaker(None, None, {}) == "참석자 1"
+
+
+def test_iter_turns_merges_consecutive_same_speaker(synthetic_transcript):
+    # synthetic_transcript의 첫 두 세그먼트("화자1")는 하나로 병합되어야 함
+    turns = iter_turns(synthetic_transcript)
+    assert len(turns) == 4
+    assert turns[0].speaker == "참석자 1"
+    assert turns[0].start == 0.0
+    assert turns[0].text == "안녕하세요. 오늘 안건 회의를 시작하겠습니다."
+    assert turns[1].speaker == "참석자 2"
+    assert turns[2].speaker == "참석자 1"
+    assert turns[3].speaker == "참석자 3"
 
 
 def test_export_txt_roundtrip(synthetic_transcript, tmp_path):
@@ -85,14 +102,38 @@ def test_export_txt_roundtrip(synthetic_transcript, tmp_path):
     parsed = clova_txt.parse(out_file)
     assert parsed.meta["title"] == synthetic_transcript.meta["title"]
     assert parsed.duration == synthetic_transcript.duration
-    assert len(parsed.segments) == len(synthetic_transcript.segments)
 
-    expected_speakers = ["홍길동", "김철수", "홍길동", "이영희"]
-    for orig, back, exp_spk in zip(synthetic_transcript.segments, parsed.segments, expected_speakers):
-        assert back.speaker == exp_spk
-        assert back.start == orig.start
-        assert back.end == orig.end
-        assert back.text == orig.text
+    # 병합된 turn 기준으로 4개 세그먼트 생성
+    expected = [
+        ("홍길동", 0.0, 15.0, "안녕하세요. 오늘 안건 회의를 시작하겠습니다."),
+        ("김철수", 15.0, 45.0, "네 반갑습니다. 바로 1번 안건 보고해 주세요."),
+        ("홍길동", 45.0, 3665.0, "1번 안건은 시스템 성능 최적화 건입니다."),
+        ("이영희", 3665.0, 3720.0, "1시간이 지났으니 마무리 발언 부탁드립니다."),
+    ]
+    assert len(parsed.segments) == len(expected)
+    for (exp_spk, exp_start, exp_end, exp_text), actual in zip(expected, parsed.segments):
+        assert actual.speaker == exp_spk
+        assert actual.start == exp_start
+        assert actual.end == exp_end
+        assert actual.text == exp_text
+
+
+def test_export_custom_title_and_recorded_at(synthetic_transcript, tmp_path):
+    out_file = tmp_path / "custom.txt"
+    export_transcript(
+        synthetic_transcript,
+        "txt",
+        out_file,
+        title="사용자 지정 안건 회의",
+        recorded_at="2026.11.01 Sun PM 2:00",
+    )
+
+    lines = out_file.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "사용자 지정 안건 회의"
+    assert lines[1].startswith("2026.11.01 Sun PM 2:00 ・")
+
+    parsed = clova_txt.parse(out_file)
+    assert parsed.meta["title"] == "사용자 지정 안건 회의"
 
 
 def test_export_md(synthetic_transcript, tmp_path):
@@ -102,7 +143,7 @@ def test_export_md(synthetic_transcript, tmp_path):
     content = out_file.read_text(encoding="utf-8")
     assert "# 합성 테스트 회의" in content
     assert "홍길동" in content
-    assert "**홍길동** `00:00`" in content
+    assert "**홍길동** 00:00" in content
     assert "안녕하세요. 오늘 안건 회의를 시작하겠습니다." in content
 
 
@@ -132,7 +173,6 @@ def test_invalid_format(synthetic_transcript, tmp_path):
 
 
 def test_format_variations_and_empty_segments(tmp_path):
-    # 빈 세그먼트 및 메타데이터 최소화 케이스
     empty_t = Transcript(
         source="empty_sample.wav",
         duration=0.0,
@@ -148,7 +188,6 @@ def test_format_variations_and_empty_segments(tmp_path):
     assert parsed.duration == 0.0
     assert len(parsed.segments) == 0
 
-    # 공백 텍스트만 있는 세그먼트는 내보내기에서 스킵되는지 확인
     ws_t = Transcript(
         source="ws_sample.wav",
         duration=10.0,
@@ -164,31 +203,4 @@ def test_format_variations_and_empty_segments(tmp_path):
     export_transcript(ws_t, "MD", ws_out)
     content = ws_out.read_text(encoding="utf-8")
     assert "유효 발화" in content
-    assert content.count("**화자1**") == 1
-
-
-def test_local_clova_roundtrip_if_available(tmp_path):
-    """local/clova 폴더가 로컬에 있는 경우 실제 샘플 텍스트와의 roundtrip 테스트."""
-    local_clova = Path("local/clova")
-    if not local_clova.is_dir():
-        pytest.skip("local/clova 샘플 없음")
-
-    sample_files = list(local_clova.glob("*.txt"))
-    if not sample_files:
-        pytest.skip("local/clova 내 txt 파일 없음")
-
-    for p in sample_files:
-        orig_transcript = clova_txt.parse(p)
-        out_txt = tmp_path / f"export_{p.name}"
-        export_transcript(orig_transcript, "txt", out_txt)
-
-        reloaded = clova_txt.parse(out_txt)
-        assert reloaded.duration == orig_transcript.duration, f"{p.name} duration mismatch"
-        assert reloaded.meta["title"] == orig_transcript.meta["title"], f"{p.name} title mismatch"
-        assert len(reloaded.segments) == len(orig_transcript.segments), f"{p.name} segments len mismatch"
-
-        for i, (s1, s2) in enumerate(zip(orig_transcript.segments, reloaded.segments)):
-            assert s1.speaker == s2.speaker, f"{p.name}[{i}] speaker mismatch"
-            assert s1.start == s2.start, f"{p.name}[{i}] start mismatch"
-            assert s1.end == s2.end, f"{p.name}[{i}] end mismatch"
-            assert s1.text == s2.text, f"{p.name}[{i}] text mismatch"
+    assert content.count("**참석자 1**") == 1

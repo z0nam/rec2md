@@ -1,19 +1,30 @@
 """클로바노트식 녹취록 내보내기 (txt, md, html).
 
-클로바노트 txt 배치(제목, 일시·길이, 참석자 줄, 그 아래 "화자 mm:ss" + 발화)를
+클로바노트 txt 배치(제목, 일시·길이, 참석자 줄, 그 아래 "화자 MM:SS" 또는 "화자 H:MM:SS" + 발화)를
 따르며 clova_txt 파서로 다시 읽었을 때 왕복(round-trip)이 성립한다.
 """
 
 from __future__ import annotations
 
 import html
+import re
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from .segments import Transcript
 
 
-def _format_datetime(t: Transcript) -> str:
+@dataclass
+class Turn:
+    speaker: str
+    start: float
+    text: str
+
+
+def _format_datetime(t: Transcript, recorded_at: str | None = None) -> str:
+    if recorded_at:
+        return recorded_at
     if t.meta.get("datetime"):
         return str(t.meta["datetime"])
     if t.meta.get("date"):
@@ -29,7 +40,7 @@ def _format_datetime(t: Transcript) -> str:
 
 
 def format_duration(dur_sec: float) -> str:
-    """초 단위를 클로바노트 형식(Hours Minutes seconds) 문자열로 변환."""
+    """초 단위를 클로바노트 파서가 인식하는 지속시간 문자열로 변환."""
     tot = max(0, int(round(dur_sec)))
     h = tot // 3600
     m = (tot % 3600) // 60
@@ -40,20 +51,20 @@ def format_duration(dur_sec: float) -> str:
 
 
 def format_ts(sec: float) -> str:
-    """초 단위를 클로바노트 타임스탬프(mm:ss 또는 hh:mm:ss)로 변환."""
+    """초 단위를 클로바 타임스탬프 (1시간 미만 MM:SS, 이상 H:MM:SS)로 변환."""
     tot = max(0, int(round(sec)))
     h = tot // 3600
     m = (tot % 3600) // 60
     s = tot % 60
     if h > 0:
-        return f"{h:02d}:{m:02d}:{s:02d}"
+        return f"{h}:{m:02d}:{s:02d}"
     return f"{m:02d}:{s:02d}"
 
 
 def resolve_speaker(spk: str | None, names: dict[str, str] | None, meta: dict) -> str:
-    """화자 라벨(예: 화자1)을 실명 매핑(names 또는 meta.speaker_names)으로 변환."""
+    """화자 라벨(예: 화자1)을 실명 매핑으로 변환. 없으면 '참석자 N'."""
     if not spk:
-        return "화자"
+        return "참석자 1"
     if names and spk in names:
         val = names[spk]
         return val if isinstance(val, str) else val.get("name", spk)
@@ -64,54 +75,87 @@ def resolve_speaker(spk: str | None, names: dict[str, str] | None, meta: dict) -
             return val.get("name") or spk
         if isinstance(val, str):
             return val
+
+    # 화자N -> 참석자 N 변환
+    m = re.match(r"^화자\s*(\d+)$", spk)
+    if m:
+        return f"참석자 {m.group(1)}"
+    m2 = re.match(r"^SPEAKER_(\d+)$", spk, re.I)
+    if m2:
+        return f"참석자 {int(m2.group(1)) + 1}"
     return spk
 
 
-def render_clova_txt(t: Transcript, names: dict[str, str] | None = None) -> str:
-    """클로바노트 txt 내보내기 형식 생성."""
-    title = t.meta.get("title") or Path(t.source).stem or "녹취록"
-    dt_str = _format_datetime(t)
-    dur_str = format_duration(t.duration)
+def iter_turns(t: Transcript, names: dict[str, str] | None = None) -> list[Turn]:
+    """같은 화자가 이어 말한 세그먼트는 한 블록으로 합친다 (render.render_raw 규칙)."""
+    turns: list[Turn] = []
+    cur_spk_raw, cur_spk_name, cur_start, buf = object(), "", 0.0, []
 
-    unique_speakers = list(dict.fromkeys(
-        resolve_speaker(s.speaker, names, t.meta)
-        for s in t.segments
-        if s.text.strip()
-    ))
-    attendees_str = " ".join(unique_speakers)
+    def flush():
+        if buf:
+            turns.append(Turn(speaker=cur_spk_name, start=cur_start, text=" ".join(buf)))
 
-    lines = [
-        title,
-        f"{dt_str} ・ {dur_str}",
-        attendees_str,
-        "",
-    ]
     for s in t.segments:
         text = s.text.strip()
         if not text:
             continue
-        spk = resolve_speaker(s.speaker, names, t.meta)
-        lines.append(f"{spk} {format_ts(s.start)}")
-        lines.append(text)
+        # 화자 정보가 없으면 세그먼트마다 끊어 타임스탬프를 살린다
+        if s.speaker != cur_spk_raw or s.speaker is None:
+            flush()
+            cur_spk_raw = s.speaker
+            cur_spk_name = resolve_speaker(s.speaker, names, t.meta)
+            cur_start = s.start
+            buf = []
+        buf.append(text)
+    flush()
+    return turns
+
+
+def render_clova_txt(
+    t: Transcript,
+    names: dict[str, str] | None = None,
+    title: str | None = None,
+    recorded_at: str | None = None,
+) -> str:
+    """클로바노트 txt 내보내기 형식 생성."""
+    doc_title = title or t.meta.get("title") or Path(t.source).stem or "녹취록"
+    dt_str = _format_datetime(t, recorded_at=recorded_at)
+    dur_str = format_duration(t.duration)
+
+    turns = iter_turns(t, names=names)
+    unique_speakers = list(dict.fromkeys(turn.speaker for turn in turns))
+    attendees_str = " ".join(unique_speakers)
+
+    lines = [
+        doc_title,
+        f"{dt_str} ・ {dur_str}",
+        attendees_str,
+        "",
+    ]
+    for turn in turns:
+        lines.append(f"{turn.speaker} {format_ts(turn.start)}")
+        lines.append(turn.text)
         lines.append("")
     return "\n".join(lines)
 
 
-def render_clova_md(t: Transcript, names: dict[str, str] | None = None) -> str:
+def render_clova_md(
+    t: Transcript,
+    names: dict[str, str] | None = None,
+    title: str | None = None,
+    recorded_at: str | None = None,
+) -> str:
     """클로바노트식 Markdown 생성."""
-    title = t.meta.get("title") or Path(t.source).stem or "녹취록"
-    dt_str = _format_datetime(t)
+    doc_title = title or t.meta.get("title") or Path(t.source).stem or "녹취록"
+    dt_str = _format_datetime(t, recorded_at=recorded_at)
     dur_str = format_duration(t.duration)
 
-    unique_speakers = list(dict.fromkeys(
-        resolve_speaker(s.speaker, names, t.meta)
-        for s in t.segments
-        if s.text.strip()
-    ))
+    turns = iter_turns(t, names=names)
+    unique_speakers = list(dict.fromkeys(turn.speaker for turn in turns))
     attendees_str = ", ".join(unique_speakers) if unique_speakers else "없음"
 
     lines = [
-        f"# {title}",
+        f"# {doc_title}",
         "",
         f"{dt_str} ・ {dur_str}  ",
         f"**참석자**: {attendees_str}",
@@ -119,29 +163,26 @@ def render_clova_md(t: Transcript, names: dict[str, str] | None = None) -> str:
         "---",
         "",
     ]
-    for s in t.segments:
-        text = s.text.strip()
-        if not text:
-            continue
-        spk = resolve_speaker(s.speaker, names, t.meta)
-        lines.append(f"**{spk}** `{format_ts(s.start)}`")
-        lines.append("")
-        lines.append(text)
+    for turn in turns:
+        lines.append(f"**{turn.speaker}** {format_ts(turn.start)}")
+        lines.append(turn.text)
         lines.append("")
     return "\n".join(lines)
 
 
-def render_clova_html(t: Transcript, names: dict[str, str] | None = None) -> str:
-    """클로바노트 스타일 단독 HTML 생성 (인쇄 CSS 포함)."""
-    title = t.meta.get("title") or Path(t.source).stem or "녹취록"
-    dt_str = _format_datetime(t)
+def render_clova_html(
+    t: Transcript,
+    names: dict[str, str] | None = None,
+    title: str | None = None,
+    recorded_at: str | None = None,
+) -> str:
+    """클로바노트 스타일 단독 HTML 생성 (인쇄 친화 인라인 CSS 포함)."""
+    doc_title = title or t.meta.get("title") or Path(t.source).stem or "녹취록"
+    dt_str = _format_datetime(t, recorded_at=recorded_at)
     dur_str = format_duration(t.duration)
 
-    unique_speakers = list(dict.fromkeys(
-        resolve_speaker(s.speaker, names, t.meta)
-        for s in t.segments
-        if s.text.strip()
-    ))
+    turns = iter_turns(t, names=names)
+    unique_speakers = list(dict.fromkeys(turn.speaker for turn in turns))
 
     attendees_html = "".join(
         f'<span class="attendee-tag">{html.escape(spk)}</span>'
@@ -149,17 +190,13 @@ def render_clova_html(t: Transcript, names: dict[str, str] | None = None) -> str
     )
 
     turns_html_parts = []
-    for s in t.segments:
-        text = s.text.strip()
-        if not text:
-            continue
-        spk = resolve_speaker(s.speaker, names, t.meta)
-        ts = format_ts(s.start)
-        escaped_text = html.escape(text)
+    for turn in turns:
+        ts = format_ts(turn.start)
+        escaped_text = html.escape(turn.text)
         turns_html_parts.append(
             f'<div class="turn">\n'
             f'  <div class="turn-header">\n'
-            f'    <span class="speaker-name">{html.escape(spk)}</span>\n'
+            f'    <span class="speaker-name">{html.escape(turn.speaker)}</span>\n'
             f'    <span class="timestamp">{ts}</span>\n'
             f'  </div>\n'
             f'  <p class="utterance">{escaped_text}</p>\n'
@@ -167,7 +204,7 @@ def render_clova_html(t: Transcript, names: dict[str, str] | None = None) -> str
         )
     turns_html = "\n".join(turns_html_parts)
 
-    escaped_title = html.escape(title)
+    escaped_title = html.escape(doc_title)
     return f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -270,6 +307,10 @@ def render_clova_html(t: Transcript, names: dict[str, str] | None = None) -> str
     white-space: pre-wrap;
     word-break: break-word;
   }}
+  @page {{
+    size: A4;
+    margin: 20mm;
+  }}
   @media print {{
     body {{ background: white; color: black; padding: 0; }}
     .turn {{ break-inside: avoid; }}
@@ -300,6 +341,8 @@ def export_transcript(
     fmt: str,
     out: Path,
     names: dict[str, str] | None = None,
+    title: str | None = None,
+    recorded_at: str | None = None,
 ) -> Path:
     """Transcript를 지정 형식(txt, md, html)으로 내보낸다.
 
@@ -308,6 +351,8 @@ def export_transcript(
         fmt: 내보낼 형식 ('txt', 'md', 'html')
         out: 출력 파일 경로 또는 디렉터리 경로
         names: 화자 라벨 매핑 (예: {"화자1": "홍길동"}) - 미지정시 t.meta["speaker_names"] 참조
+        title: 회의명 (미지정시 t.meta["title"] 또는 파일명)
+        recorded_at: 녹음 일시 문자열 (미지정시 t.meta 일시 또는 현재 시각)
 
     Returns:
         실제 저장된 파일의 Path
@@ -326,11 +371,11 @@ def export_transcript(
     target.parent.mkdir(parents=True, exist_ok=True)
 
     if fmt == "txt":
-        content = render_clova_txt(t, names=names)
+        content = render_clova_txt(t, names=names, title=title, recorded_at=recorded_at)
     elif fmt == "md":
-        content = render_clova_md(t, names=names)
+        content = render_clova_md(t, names=names, title=title, recorded_at=recorded_at)
     elif fmt == "html":
-        content = render_clova_html(t, names=names)
+        content = render_clova_html(t, names=names, title=title, recorded_at=recorded_at)
     else:
         raise ValueError(f"지원하지 않는 형식입니다: {fmt}")
 
