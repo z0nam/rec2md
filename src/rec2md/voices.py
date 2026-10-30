@@ -25,6 +25,10 @@ MARGIN = 0.05  # 임계값 + 이 값 미만은 "이름?"으로 표시
 MIN_ENROLL_SEC = 30.0  # 이보다 짧은 클러스터는 임베딩이 불안정해 등록을 거절한다
 OUTLIER_COS = 0.5  # 구간 임베딩이 클러스터 중심과 이보다 멀면 다른 사람이 섞인 것으로 보고 등록에서 뺀다
 MIN_PURITY = 0.8  # 등록에 남은 발화 비율이 이보다 낮으면 경고
+# 실측(녹취 5건): 같은 사람의 녹취 간 등록 벡터 최저 0.83, 다른 사람끼리 최고 0.65
+ENROLL_MIN_SIM = 0.75  # 이미 등록된 사람에 새 임베딩을 더할 때, 기존 것과 이만큼 닮지 않으면 거절(--force로 강제)
+# 실측: 맞게 붙은 화자의 1위-2위 사람 점수 차 최저 0.26. 차가 이보다 작으면 두 사람 사이에서 헷갈린 것으로 본다
+MIN_GAP = 0.15
 
 
 def sidecar_path(seg_path: Path) -> Path:
@@ -166,10 +170,13 @@ class VoiceDB:
 
 def enroll(db: VoiceDB, sidecar: dict[str, tuple[np.ndarray, float]], mapping: dict[str, str],
            source: str, min_sec: float = MIN_ENROLL_SEC, skip_short: bool = False,
-           segments: dict[str, list] | None = None) -> list[str]:
+           segments: dict[str, list] | None = None, force: bool = False,
+           min_sim: float = ENROLL_MIN_SIM) -> list[str]:
     """mapping {화자N: 이름}을 등록하고 결과 문장 목록을 돌려준다.
 
-    짧은 클러스터는 기본으로 전부 거절하고(명시한 매핑이 틀렸을 수 있으니), skip_short면 그것만 빼고 등록한다.
+    짧은 클러스터, 그리고 이미 등록된 그 사람의 목소리와 닮지 않은 클러스터(이름을 잘못 줬거나 원거리 녹음처럼
+    방·마이크가 크게 다른 경우)는 기본으로 전부 거절한다. skip_short면 그것만 빼고 등록한다(검토 화면 이름 일괄 등록용).
+    force면 닮음 검사를 건너뛴다. 처음 등록하는 사람은 비교할 것이 없으니 검사하지 않는다.
     segments(구간 임베딩)가 있으면 중심에서 먼 구간을 뺀 벡터를 등록하고, 많이 빠졌으면 경고한다.
     """
     for label in mapping:
@@ -181,9 +188,20 @@ def enroll(db: VoiceDB, sidecar: dict[str, tuple[np.ndarray, float]], mapping: d
                          + ", ".join(f"{lb}({sidecar[lb][1]:.0f}초)" for lb in short))
     msgs = [f"{lb} → {mapping[lb]} 건너뜀: 발화 {sidecar[lb][1]:.0f}초 < {min_sec:.0f}초" for lb in short]
     mapping = {lb: n for lb, n in mapping.items() if lb not in short}
+    robust = {lb: robust_vector(sidecar[lb][0], (segments or {}).get(lb, [])) for lb in mapping}
+    known = db.vectors()
+    unlike = {lb: float((known[n] @ robust[lb][0]).max()) for lb, n in mapping.items()
+              if n in known and not force}
+    unlike = {lb: sim for lb, sim in unlike.items() if sim < min_sim}
+    if unlike and not skip_short:
+        raise SystemExit("이미 등록된 목소리와 닮지 않아 등록하지 않음(이름이 맞는지 확인, 원거리 녹음 등 확실하면 --force): "
+                         + ", ".join(f"{lb}→{mapping[lb]} 유사도 {sim:.2f} < {min_sim:.2f}" for lb, sim in unlike.items()))
+    msgs += [f"{lb} → {mapping[lb]} 건너뜀: 등록된 목소리와 유사도 {sim:.2f} < {min_sim:.2f} (확실하면 --force)"
+             for lb, sim in unlike.items()]
+    mapping = {lb: n for lb, n in mapping.items() if lb not in unlike}
     for label, name in mapping.items():
-        vec, sec = sidecar[label]
-        vec, purity, dropped = robust_vector(vec, (segments or {}).get(label, []))
+        sec = sidecar[label][1]
+        vec, purity, dropped = robust[label]
         added = db.add(name, vec, source, label, sec)
         msgs.append(f"{label} → {name} ({sec:.0f}초)" + ("" if added else " — 이미 등록됨"))
         # 짧은 구간은 같은 사람이어도 중심에서 멀게 나오곤 해서(실측 순도 0.88 이상) 순도가 낮을 때만 알린다
@@ -207,11 +225,12 @@ def score_matrix(people: dict[str, np.ndarray], clusters: dict[str, tuple[np.nda
 
 
 def match(people: dict[str, np.ndarray], clusters: dict[str, tuple[np.ndarray, float]],
-          threshold: float = THRESHOLD, margin: float = MARGIN) -> dict[str, dict]:
-    """{화자N: {"name", "score"[, "tentative"][, "same_as"]}}. 임계값 미만은 빠진다.
+          threshold: float = THRESHOLD, margin: float = MARGIN, min_gap: float = MIN_GAP) -> dict[str, dict]:
+    """{화자N: {"name", "score"[, "tentative"][, "gap"][, "same_as"]}}. 임계값 미만은 빠진다.
 
     한 녹취에서 한 사람은 한 클러스터에만 붙인다(헝가리안). pyannote가 한 사람을 둘로 쪼갠 경우를 위해,
     1:1에서 밀렸지만 같은 사람에 임계값을 넘는 클러스터는 same_as를 달고 tentative로 남긴다.
+    붙은 사람과 다음으로 닮은 사람의 점수 차가 min_gap보다 작으면 tentative로 낮추고 그 차를 gap에 남긴다.
     """
     if not people or not clusters:
         return {}
@@ -233,6 +252,9 @@ def match(people: dict[str, np.ndarray], clusters: dict[str, tuple[np.ndarray, f
         j = names.index(name)
         main = max(rows_, key=lambda i: clusters[labels[i]][1])  # 쪼개졌으면 발화가 긴 쪽을 본 화자로
         out[labels[main]] = _hit(name, m[main, j], threshold, margin)
+        others = np.delete(m[main], j)
+        if len(others) and (gap := float(m[main, j] - others.max())) < min_gap:
+            out[labels[main]].update(tentative=True, gap=round(gap, 3))
         for i in rows_:
             if i != main:
                 out[labels[i]] = {"name": name, "score": round(float(m[i, j]), 3), "tentative": True,
