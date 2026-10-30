@@ -82,8 +82,8 @@ def test_run_skips_and_records_state(folder, calls):
     cmd_batch.main([str(folder)])
     assert seen == ["a_meeting.mp3", "b_call.M4A"]
     st = state_of(folder)
-    assert st == {"a_meeting.mp3": {"status": "done", "sec": 1800.0},
-                  "b_call.M4A": {"status": "done", "sec": 600.0}}
+    assert st == {"a_meeting.mp3": {"status": "done", "sec": 1800.0, "source": str((folder / "a_meeting.mp3").resolve())},
+                  "b_call.M4A": {"status": "done", "sec": 600.0, "source": str((folder / "b_call.M4A").resolve())}}
     # 다시 돌리면 done은 건너뛴다
     seen.clear()
     cmd_batch.main([str(folder)])
@@ -105,7 +105,7 @@ def test_failure_continues_and_resume_retries(folder, calls):
     fail.clear()
     cmd_batch.main([str(folder)])
     assert seen == ["a_meeting.mp3"]
-    assert state_of(folder)["a_meeting.mp3"] == {"status": "done", "sec": 1800.0}
+    assert state_of(folder)["a_meeting.mp3"]["status"] == "done"
 
 
 def test_dry_run_shows_retry_and_done(folder, calls, capsys):
@@ -146,3 +146,42 @@ def test_missing_or_empty_folder(tmp_path):
     (tmp_path / "empty").mkdir()
     with pytest.raises(SystemExit, match="처리할 녹음"):
         cmd_batch.main([str(tmp_path / "empty")])
+
+
+def test_same_stem_is_not_processed(folder, calls, capsys):
+    """회의.mp3와 회의.wav는 출력(회의.segments.json)이 겹친다 → 둘 다 처리하지 않고 알린다 (Codex 리뷰 #28)."""
+    (folder / "A_MEETING.wav").write_bytes(b"")  # 대소문자만 달라도 겹친다
+    LENGTHS["A_MEETING.wav"] = 900.0
+    try:
+        seen, _ = calls
+        with pytest.raises(SystemExit, match="출력 이름이 겹쳐"):
+            cmd_batch.main([str(folder)])
+        assert seen == ["b_call.M4A"]
+        out = capsys.readouterr().out
+        assert sum(1 for line in out.splitlines() if line.endswith(cmd_batch.CLASH)) == 2
+        assert "a_meeting.mp3" not in state_of(folder)
+    finally:
+        del LENGTHS["A_MEETING.wav"]
+
+
+def test_other_folder_with_same_name_is_not_skipped_as_done(folder, calls, tmp_path):
+    """같은 --out을 다른 폴더가 이미 썼으면, 같은 이름 파일을 '이미 처리'로 건너뛰지 않고 겹침으로 막는다."""
+    seen, _ = calls
+    out = tmp_path / "shared"
+    cmd_batch.main([str(folder), "--out", str(out)])
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "a_meeting.mp3").write_bytes(b"")
+    seen.clear()
+    with pytest.raises(SystemExit, match="출력 이름이 겹쳐"):
+        cmd_batch.main([str(other), "--out", str(out)])
+    assert seen == []  # 덮어쓰지도, 건너뛰지도(이미 처리) 않는다
+
+
+def test_state_without_source_is_still_resumed(folder, calls):
+    """source가 없는 예전 상태 파일도 같은 원본으로 보고 이어서 돈다."""
+    seen, _ = calls
+    cmd_batch.save_state(folder / "_transcripts" / cmd_batch.STATE_FILE,
+                         {"a_meeting.mp3": {"status": "done", "sec": 1800.0}})
+    cmd_batch.main([str(folder)])
+    assert seen == ["b_call.M4A"]
