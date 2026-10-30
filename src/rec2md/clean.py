@@ -42,6 +42,44 @@ def collapse_repeats(segs: list[Segment]) -> list[Segment]:
     return out
 
 
+MAX_PERIOD = 4  # 몇 토큰짜리 묶음까지 반복 루프로 볼지
+
+
+def collapse_ngram_loops(segs: list[Segment]) -> list[Segment]:
+    """2〜MAX_PERIOD개 토큰 묶음이 MAX_REPEAT번 넘게 이어지면 MAX_REPEAT번만 남긴다.
+
+    collapse_repeats는 같은 토큰의 연속만 보므로 "가나 bar, 가나 bar, …"처럼 두 토큰이 번갈아 도는
+    루프를 놓친다(실측: 64분 회의에서 한 세그먼트가 55회 반복, 회의 뒤 구간 CER 35%→53%).
+    한 세그먼트 안에서만 본다. 같은 토큰 하나로 된 묶음은 collapse_repeats 몫이다.
+    """
+    for s in segs:
+        if not s.words:
+            continue
+        keys = [_norm(w.text) for w in s.words]
+        drop = [False] * len(keys)
+        for p in range(2, MAX_PERIOD + 1):
+            i = 0
+            while i + p * (MAX_REPEAT + 1) <= len(keys):
+                unit = keys[i:i + p]
+                if not all(unit) or len(set(unit)) == 1 or any(drop[i:i + p]):
+                    i += 1
+                    continue
+                k = 1
+                while keys[i + k * p:i + (k + 1) * p] == unit:
+                    k += 1
+                if k > MAX_REPEAT:
+                    for j in range(i + MAX_REPEAT * p, i + k * p):
+                        drop[j] = True
+                    i += k * p
+                else:
+                    i += 1
+        if any(drop):
+            s.words = [w for w, d in zip(s.words, drop) if not d]
+            s.text = "".join(w.text for w in s.words).strip()
+            s.end = s.words[-1].end
+    return segs
+
+
 # Whisper가 무음·잡음에서 자주 지어내는 문구(방송 자막으로 학습된 흔적). 세그먼트가 이것뿐이면 버린다
 _KNOWN = [
     "시청해주셔서감사합니다", "구독과좋아요", "구독좋아요", "촬영기자", "영상편집", "자막제공",
