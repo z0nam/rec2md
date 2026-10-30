@@ -143,8 +143,10 @@ def main(argv: list[str]) -> None:
         if not sources:
             raise SystemExit("pdf·png로 바꿀 원천이 없음: --format에 html(또는 docx, hwpx)을 넣을 것")
         for s in sources:
+            # 원천이 여럿이면(docx와 hwpx) <이름>.<형식>.pdf로 구분해 서로 덮어쓰지 않게 한다
+            stem = f"{args.name}.{s.suffix[1:]}" if len(sources) > 1 else args.name
             try:
-                for o in export(s, targets, args.out_dir):
+                for o in export(s, targets, args.out_dir, stem=stem):
                     log(f"→ {o}")
             except ExportError as e:
                 raise SystemExit(str(e)) from None

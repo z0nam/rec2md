@@ -122,12 +122,13 @@ def to_png(src: Path, out_dir: Path | None = None) -> list[Path]:
         return pdf_to_png(pdf, out_dir, stem)
 
 
-def export(src: Path, targets: list[str], out_dir: Path | None = None) -> list[Path]:
-    """src를 targets(pdf, png)로. pdf와 png를 같이 달라면 pdf를 한 번만 만든다."""
+def export(src: Path, targets: list[str], out_dir: Path | None = None, stem: str | None = None) -> list[Path]:
+    """src를 targets(pdf, png)로. pdf와 png를 같이 달라면 pdf를 한 번만 만든다.
+    stem은 출력 이름(기본: src 이름에서 확장자를 뗀 것). 원천이 여럿이면 호출자가 겹치지 않게 준다."""
     if unknown := set(targets) - {"pdf", "png"}:
         raise ExportError(f"모르는 내보내기 형식: {', '.join(sorted(unknown))} (pdf, png)")
     out_dir = out_dir or src.parent
-    stem = src.name[: -len(src.suffix)]
+    stem = stem or src.name[: -len(src.suffix)]
     outs: list[Path] = []
     pdf = None
     if "pdf" in targets:
@@ -135,5 +136,16 @@ def export(src: Path, targets: list[str], out_dir: Path | None = None) -> list[P
         outs.append(pdf)
     if "png" in targets:
         has_own_png = src.suffix.lower() not in (".html", ".pdf") and hasattr(_module(src.suffix[1:].lower()), "to_png")
-        outs += pdf_to_png(pdf, out_dir, stem) if pdf and not has_own_png else to_png(src, out_dir)
+        src_stem = src.name[: -len(src.suffix)]
+        if pdf and not has_own_png:
+            outs += pdf_to_png(pdf, out_dir, stem)
+        elif stem == src_stem:
+            outs += to_png(src, out_dir)
+        elif has_own_png:  # 형식 모듈은 src 이름으로 쓰므로 <src>.pN.png → <stem>.pN.png로 바꾼다
+            for o in to_png(src, out_dir):
+                new = o.with_name(stem + o.name[len(src_stem):]) if o.name.startswith(src_stem + ".") else o
+                outs.append(o.replace(new) if new != o else o)
+        else:  # 이름을 바꿔야 하니 임시 pdf를 거친다
+            with tempfile.TemporaryDirectory(prefix="rec2md-export-") as td:
+                outs += pdf_to_png(to_pdf(src, Path(td) / f"{stem}.pdf"), out_dir, stem)
     return outs

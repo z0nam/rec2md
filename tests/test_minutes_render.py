@@ -173,3 +173,36 @@ def test_cli_transcript_calls_export_transcript(tmp_path, monkeypatch):
                      (2, "html", "call.html", {"화자1": "홍길동"}, "합성", None)]
     with pytest.raises(SystemExit, match="녹취록 형식이 아님"):
         cmd_render.main([str(src), "--format", "hwpx"])
+
+
+def test_cli_export_multiple_sources_do_not_overwrite(tmp_path, monkeypatch):
+    """html 없이 docx·hwpx를 같이 내보내면 <이름>.<형식>.pdf로 나뉜다."""
+    import sys
+    import types
+
+    def fake_module(fmt):
+        def render(m, t, out):
+            out.write_text(fmt, encoding="utf-8")
+            return out
+
+        def to_pdf(src, out):
+            out.write_text("pdf from " + src.read_text(encoding="utf-8"), encoding="utf-8")
+            return out
+
+        def to_png(src, out_dir):  # 실제 hwpx 모듈처럼 src 이름으로 쓴다
+            p = out_dir / f"{src.stem}.p1.png"
+            p.write_text("png from " + src.read_text(encoding="utf-8"), encoding="utf-8")
+            return [p]
+
+        return types.SimpleNamespace(**{f"render_{fmt}": render, "to_pdf": to_pdf, "to_png": to_png})
+
+    for fmt in ("docx", "hwpx"):
+        monkeypatch.setitem(sys.modules, f"rec2md.render.{fmt}", fake_module(fmt))
+    src = tmp_path / "m.minutes.json"
+    src.write_text(FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+    cmd_render.main([str(src), "--format", "docx,hwpx", "--export", "pdf,png"])
+    assert (tmp_path / "m.docx.pdf").read_text(encoding="utf-8") == "pdf from docx"
+    assert (tmp_path / "m.hwpx.pdf").read_text(encoding="utf-8") == "pdf from hwpx"
+    assert (tmp_path / "m.docx.p1.png").read_text(encoding="utf-8") == "png from docx"
+    assert (tmp_path / "m.hwpx.p1.png").read_text(encoding="utf-8") == "png from hwpx"
+    assert not (tmp_path / "m.pdf").exists() and not (tmp_path / "m.p1.png").exists()
