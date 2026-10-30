@@ -1,6 +1,6 @@
 """clean 모듈 단위 테스트: 디코딩 루프 반복 정리, 알려진 환각 제거."""
 
-from rec2md.clean import collapse_repeats, drop_known_hallucinations
+from rec2md.clean import collapse_ngram_loops, collapse_repeats, drop_known_hallucinations
 from rec2md.segments import Segment, Word
 
 
@@ -88,3 +88,39 @@ def test_drop_known_hallucinations_long_text_kept():
     res = drop_known_hallucinations([seg])
     assert len(res) == 1
     assert res[0].text == long_text
+
+
+def _seg(tokens: list[str]) -> Segment:
+    words = [Word(i * 0.3, i * 0.3 + 0.25, f" {t}") for i, t in enumerate(tokens)]
+    return Segment(0.0, words[-1].end, "".join(w.text for w in words).strip(), words=words)
+
+
+def test_collapse_ngram_loops_two_token_loop():
+    # 두 토큰이 번갈아 도는 디코딩 루프는 collapse_repeats가 못 잡는다
+    seg = _seg(["알겠습니다."] + ["가나", "bar,"] * 20)
+    assert collapse_repeats([seg])[0].text.count("bar") == 20
+    res = collapse_ngram_loops([_seg(["알겠습니다."] + ["가나", "bar,"] * 20)])
+    assert res[0].text == "알겠습니다. 가나 bar, 가나 bar, 가나 bar,"
+    assert res[0].end == res[0].words[-1].end
+
+
+def test_collapse_ngram_loops_keeps_natural_repeats():
+    # 3번까지의 반복과 섞인 반복은 그대로 둔다
+    tokens = ["좋아요", "좋아요", "그래서", "예산", "그래서", "예산", "그래서", "예산", "확정"]
+    res = collapse_ngram_loops([_seg(tokens)])
+    assert len(res[0].words) == len(tokens)
+
+
+def test_collapse_ngram_loops_three_token_loop():
+    res = collapse_ngram_loops([_seg(["다", "나", "가"] * 6)])
+    assert [w.text.strip() for w in res[0].words] == ["다", "나", "가"] * 3
+
+
+def test_collapse_ngram_loops_resets_across_pauses():
+    # 4초 간격으로 네 번 말한 "확인 완료."는 루프가 아니라 각각의 발화다
+    words = []
+    for k in range(4):
+        words += [Word(k * 4.0, k * 4.0 + 0.3, " 확인"), Word(k * 4.0 + 0.35, k * 4.0 + 0.7, " 완료.")]
+    seg = Segment(0.0, words[-1].end, "".join(w.text for w in words).strip(), words=words)
+    res = collapse_ngram_loops([seg])
+    assert len(res[0].words) == 8 and res[0].end == words[-1].end

@@ -11,7 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from . import audio
-from .clean import collapse_repeats, drop_known_hallucinations
+from .clean import collapse_ngram_loops, collapse_repeats, drop_known_hallucinations
 from .engines import get_engine
 from .render import fmt_ts, render_raw
 from .segments import Transcript
@@ -63,7 +63,8 @@ def run_one(src: Path, args) -> Path:
 
         t0 = time.monotonic()
         engine = get_engine(args.engine, model=args.model, prompt=prompt)
-        segs = drop_known_hallucinations(collapse_repeats(engine.transcribe(wav, args.language, regions)), prompt)
+        segs = engine.transcribe(wav, args.language, regions)
+        segs = drop_known_hallucinations(collapse_ngram_loops(collapse_repeats(segs)), prompt)
         meta["asr_sec"] = round(time.monotonic() - t0, 1)
         meta["vad"] = regions is not None
         log(f"전사 {meta['asr_sec']}s (실시간 대비 {duration / max(meta['asr_sec'], 0.1):.1f}배)")
@@ -101,7 +102,7 @@ def _voices(t: Transcript, seg_path: Path, embs: dict, seg_embs: list, turns: li
 
 
 # `rec2md <서브커맨드> ...`는 rec2md.cmd_<이름>.main(argv)로 넘긴다. 그 외 인자는 전사 대상 파일
-SUBCOMMANDS = {"voices", "render", "series", "bounds", "notes", "batch"}
+SUBCOMMANDS = {"voices", "render", "series", "bounds", "notes", "review", "batch"}
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -7,7 +7,7 @@
 - 회의 시리즈 용어집과 회의 자료로 고유명사 오인식을 줄이고, 고칠 후보만 골라 준다
 - 회의록은 에이전트가 `minutes.json`을 쓰고 `rec2md render`가 양식(국내 기관 공통, 제주연구원, 사용자 양식)에 맞춰 찍는다
 
-> 상태(2026-10-30): 전사·화자분리, 맥락 보정(`series`), 회의록 렌더(`render`), 화자 목소리 DB(`voices`) 동작. 클로바식 녹취록 내보내기, 폴더 일괄 처리(`batch`), 검토 화면(`review`)은 작업 중. 설계는 [`docs/PLAN.md`](docs/PLAN.md).
+> 상태(2026-10-30): 전사·화자분리, 맥락 보정(`series`), 회의록 렌더(`render`), 화자 목소리 DB(`voices`) 동작. 검토 화면(`review`) 동작. 클로바식 녹취록 내보내기, 폴더 일괄 처리(`batch`)는 작업 중. 설계는 [`docs/PLAN.md`](docs/PLAN.md).
 
 ## 설치 (Apple Silicon Mac)
 
@@ -44,7 +44,8 @@ uv tool install --editable '.[diarize,render,export,office]'
 | `rec2md render --kind transcript ...` | segments.json → 클로바노트식 녹취록 (txt·md·html) | 작업 중 |
 | `rec2md voices ...` | 목소리 등록, 새 녹취에 실명 자동 태깅 | 동작 |
 | `rec2md batch <폴더>` | 폴더 일괄 전사, `--dry-run`, 중단 후 이어서 | 예정 |
-| `rec2md review <segments.json>` | 문장 클릭 재생 + 화자 고치기 (로컬 웹 화면) | 예정 |
+| `rec2md review <segments.json>` | 문장 클릭 재생 + 화자 고치기 (이 맥에서만 열리는 웹 화면) | 동작 |
+| `rec2md review --queue <cases.json>` | 사례를 하나씩 듣고 판정 → `answers.json` (평가 정답) | 동작 |
 
 ### 전사
 
@@ -84,6 +85,7 @@ rec2md meeting.m4a --no-voices                            # 자동 태깅 끄기
 - 사람마다 녹취별 임베딩을 여러 개 저장하고 가장 비슷한 것으로 매칭한다. 한 녹취에서 한 사람은 한 화자에만 붙는다.
 - 임계값(0.75) 미만이면 이름을 붙이지 않는다. 틀린 이름이 이름 없음보다 해롭기 때문이다. 근거는 `docs/PLAN.md` "화자 목소리 DB 평가".
 - 등록할 때 화자 안에서 목소리가 크게 다른 구간은 빼고 등록하며, 많이 섞였으면 그 구간 시각과 함께 경고한다.
+- 이미 등록된 사람인데 기존 목소리와 닮지 않으면 등록을 거절한다(이름을 잘못 줬을 가능성). 원거리 녹음처럼 확실할 때만 `--force`. 다른 사람과 점수가 비슷하면 `이름?`로 표시한다.
 - DB는 `~/.config/rec2md/voices/voices.db`(권한 600)다. 목소리 임베딩은 생체정보이므로 옮기거나 공유하지 않는다.
 
 ### 회의록
@@ -128,6 +130,21 @@ rec2md notes meeting.segments.json 메모.docx [--series 정례회의] [--to-ser
 - 무엇이 틀렸는지 판단하고 보정본(`메모.보정.md`, 바꾼 줄마다 `[타임스탬프]` 근거)을 쓰는 것은 스킬의 에이전트가 한다. 원본 메모는 그대로 둔다.
 - `--to-series`는 메모를 시리즈 자료로 넣어 다음 전사의 용어 후보로 쓴다.
 
+### 검토 화면 (클릭 재생, 화자 고치기, 판정)
+
+```sh
+rec2md review meeting.segments.json [--audio meeting.m4a]     # 브라우저가 열린다. Ctrl-C로 끝냄
+rec2md review --queue meeting.cases.json                       # 판정 모드
+```
+
+![검토 화면 (합성 데이터)](docs/img/review.png)
+
+- 127.0.0.1에만 뜨고 외부로 나가는 것이 없다(페이지·스크립트 모두 내장).
+- 문장을 누르면 그 시점부터 재생. 아래 재생 바: 배속, ±5초, Space 재생/정지, ←/→ 5초, ↑/↓ 이전·다음 문장. 스크롤해서 재생 위치를 벗어나면 "재생 위치로 이동".
+- 화자 이름을 누르면 "화자 변경": 기존 화자 고르기 또는 이름 입력, 범위 **이 구간만 / 이 구간부터 / 전체**. 범위마다 바뀔 구간 수와 시간을 미리 보여 준다. 범위를 넓게 바꾸면 "이 화자 구간 훑어보기"로 그 화자 구간만 차례로 들어 보고 섞인 사람을 바로잡는다. ⌘Z 되돌리기.
+- 바꿀 때마다 저장된다: `meeting.segments.json`·`raw.md` 갱신, 원본은 처음 한 번 `meeting.segments.orig.json`, 편집 로그는 `meeting.edits.json`(범위 포함). 사람이 정한 이름은 `{"name", "source": "user"}`라 `rec2md voices enroll --from-names`의 입력이 된다.
+- 판정 모드: 사례 구간을 앞뒤 1초 붙여 재생, 숫자 키로 답(0 모르겠음), R 다시 듣기. 답은 바로 `meeting.answers.json`에 저장되고 다시 열면 이어서 한다.
+
 ## 스킬 (Claude Code·Codex)
 
 `.claude/skills/rec2md/SKILL.md`. "녹취록 만들어줘", "회의록 정리", "○○ 양식 회의록" 같은 요청에 쓰인다.
@@ -139,4 +156,4 @@ rec2md notes meeting.segments.json 메모.docx [--series 정례회의] [--to-ser
 
 ## 개인정보
 
-녹취, 전사 결과, `minutes.json`, 렌더한 회의록, 메모 정렬·보정본, 시리즈 용어집, 목소리 DB는 모두 개인 데이터다. 레포는 퍼블릭이므로 커밋하지 않는다(`.gitignore`가 주요 파일을 막는다). 테스트는 합성 데이터만 쓴다.
+녹취, 전사 결과, `minutes.json`, 렌더한 회의록, 메모 정렬·보정본, 편집 로그·판정 답, 시리즈 용어집, 목소리 DB는 모두 개인 데이터다. 레포는 퍼블릭이므로 커밋하지 않는다(`.gitignore`가 주요 파일을 막는다). 테스트는 합성 데이터만 쓴다.

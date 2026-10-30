@@ -40,14 +40,19 @@ def parse(path: Path) -> Transcript:
 
     segs: list[Segment] = []
     cur: Segment | None = None
+    prev_blank = True
     for line in lines[3:]:
-        h = _HEAD.match(line.strip())
-        # 화자 줄은 빈 줄 뒤에 오지만, 발화 중간에 "이름 00:00" 꼴 문장이 섞일 일은 거의 없다
+        stripped = line.strip()
+        if not stripped:
+            prev_blank = True
+            continue
+        h = _HEAD.match(stripped) if prev_blank else None
         if h:
             cur = Segment(start=_sec(h["ts"]), end=0.0, text="", speaker=h["spk"])
             segs.append(cur)
-        elif cur is not None and line.strip():
-            cur.text = f"{cur.text} {line.strip()}".strip()
+        elif cur is not None and stripped:
+            cur.text = f"{cur.text} {stripped}".strip()
+        prev_blank = False
     for a, b in zip(segs, segs[1:]):
         a.end = b.start
     if segs:
