@@ -7,7 +7,7 @@
 - 회의 시리즈 용어집과 회의 자료로 고유명사 오인식을 줄이고, 고칠 후보만 골라 준다
 - 회의록은 에이전트가 `minutes.json`을 쓰고 `rec2md render`가 양식(국내 기관 공통, 제주연구원, 사용자 양식)에 맞춰 찍는다
 
-> 상태(2026-10-30): 전사·화자분리, 맥락 보정(`series`), 회의록 렌더(`render`) 동작. 화자 목소리 DB(`voices`), 클로바식 녹취록 내보내기, 폴더 일괄 처리(`batch`), 검토 화면(`review`)은 작업 중. 설계는 [`docs/PLAN.md`](docs/PLAN.md).
+> 상태(2026-10-30): 전사·화자분리, 맥락 보정(`series`), 회의록 렌더(`render`), 화자 목소리 DB(`voices`) 동작. 클로바식 녹취록 내보내기, 폴더 일괄 처리(`batch`), 검토 화면(`review`)은 작업 중. 설계는 [`docs/PLAN.md`](docs/PLAN.md).
 
 ## 설치 (Apple Silicon Mac)
 
@@ -24,7 +24,7 @@ uv tool install --editable '.[diarize,render,export,office]'
 | `render` | `rec2md render` md·html | Jinja2 |
 | `export` | `--export pdf,png` | pypdfium2, Pillow. html → pdf는 Chrome(없으면 WeasyPrint) |
 | `office` | `rec2md render` docx·hwpx | python-docx, docxtpl. docx → pdf는 LibreOffice, hwpx → pdf·png는 rhwp + rsvg-convert |
-| `voices` | 화자 목소리 DB (예정) | 작업 중 |
+| `voices` | 화자 목소리 DB 매칭 | NumPy, SciPy (`diarize`를 깔았으면 이미 들어 있음) |
 
 빠진 패키지·도구가 있으면 명령이 무엇을 설치하면 되는지 알려 준다.
 
@@ -41,7 +41,7 @@ uv tool install --editable '.[diarize,render,export,office]'
 | `rec2md series ...` | 회의 시리즈 용어집·참석자 관리, 보정 후보 뽑기 | 동작 |
 | `rec2md render ...` | 회의록 JSON → 양식 회의록 (md·html·docx·hwpx, pdf·png) | 동작 |
 | `rec2md render --kind transcript ...` | segments.json → 클로바노트식 녹취록 (txt·md·html) | 작업 중 |
-| `rec2md voices ...` | 목소리 등록, 새 녹취에 실명 자동 태깅 | 작업 중 |
+| `rec2md voices ...` | 목소리 등록, 새 녹취에 실명 자동 태깅 | 동작 |
 | `rec2md batch <폴더>` | 폴더 일괄 전사, `--dry-run`, 중단 후 이어서 | 예정 |
 | `rec2md review <segments.json>` | 문장 클릭 재생 + 화자 고치기 (로컬 웹 화면) | 예정 |
 
@@ -66,6 +66,23 @@ rec2md series candidates 정례회의 meeting.segments.json       # 이미 전�
 ```
 
 시리즈는 `~/.config/rec2md/series/<이름>/`에 저장된다(개인 데이터, 레포 밖).
+
+### 화자 실명 (목소리 DB)
+
+화자분리를 켜고 전사하면 `<이름>.voices.npz`(화자별 목소리 임베딩)가 함께 생긴다. 녹취록을 확인한 뒤 화자를 등록해 두면, 다음 전사부터 같은 사람에게 실명이 자동으로 붙는다(`홍길동(화자3)`, 불확실하면 `홍길동?(화자3)`).
+
+```sh
+rec2md voices enroll meeting.segments.json --map "화자1=홍길동,화자3=김철수"   # 발화 30초 미만 화자는 거절
+rec2md voices enroll meeting.segments.json --from-names   # 검토 화면에서 사용자가 지정한 이름을 등록
+rec2md voices list | rename <옛 이름> <새 이름> | forget <이름>
+rec2md voices match old.segments.json                     # 예전에 전사한 것에 다시 이름 붙이기
+rec2md meeting.m4a --no-voices                            # 자동 태깅 끄기
+```
+
+- 사람마다 녹취별 임베딩을 여러 개 저장하고 가장 비슷한 것으로 매칭한다. 한 녹취에서 한 사람은 한 화자에만 붙는다.
+- 임계값(0.75) 미만이면 이름을 붙이지 않는다. 틀린 이름이 이름 없음보다 해롭기 때문이다. 근거는 `docs/PLAN.md` "화자 목소리 DB 평가".
+- 등록할 때 화자 안에서 목소리가 크게 다른 구간은 빼고 등록하며, 많이 섞였으면 그 구간 시각과 함께 경고한다.
+- DB는 `~/.config/rec2md/voices/voices.db`(권한 600)다. 목소리 임베딩은 생체정보이므로 옮기거나 공유하지 않는다.
 
 ### 회의록
 
