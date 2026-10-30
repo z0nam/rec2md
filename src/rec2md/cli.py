@@ -49,10 +49,12 @@ def run_one(src: Path, args) -> Path:
         wav = audio.normalize(src, Path(td) / "audio.wav")
 
         turns = regions = None
+        embs: dict = {}
+        seg_embs: list = []
         if not args.no_diarize:
-            from .diarize import PIPELINE, assign_speakers, diarize, speech_regions
+            from .diarize import PIPELINE, assign_speakers, diarize_with_embeddings, speech_regions
             t0 = time.monotonic()
-            turns = diarize(wav, args.speakers)
+            turns, embs, seg_embs = diarize_with_embeddings(wav, args.speakers)
             meta["diarizer"] = PIPELINE.split("/")[-1]
             meta["diarize_sec"] = round(time.monotonic() - t0, 1)
             log(f"화자분리 {meta['diarize_sec']}s")
@@ -66,8 +68,9 @@ def run_one(src: Path, args) -> Path:
         meta["vad"] = regions is not None
         log(f"전사 {meta['asr_sec']}s (실시간 대비 {duration / max(meta['asr_sec'], 0.1):.1f}배)")
 
+        rename: dict[str, str] = {}
         if turns is not None:
-            segs = assign_speakers(segs, turns)
+            segs = assign_speakers(segs, turns, rename)
 
     t = Transcript(source=src.name, duration=duration, engine=f"{engine.name}:{getattr(engine, 'model', '')}",
                    language=args.language, segments=segs, meta=meta)
@@ -75,6 +78,8 @@ def run_one(src: Path, args) -> Path:
     meta["meeting_bounds"] = estimate(t)
     if meta["meeting_bounds"]["confidence"] != "none":
         log(f"회의 구간 추정 {summary(meta['meeting_bounds'], duration)}")
+    if turns is not None and embs and rename:  # 전사된 말이 없으면 화자N도 없어 사이드카를 만들 수 없다
+        _voices(t, seg_path, embs, seg_embs, turns, rename, args)
     t.to_json(seg_path)
     raw_path.write_text(render_raw(t, src.stem), encoding="utf-8")
     if ctx:
@@ -83,6 +88,16 @@ def run_one(src: Path, args) -> Path:
         log(f"보정 후보 {n}건")
     log(f"→ {raw_path}")
     return raw_path
+
+
+def _voices(t: Transcript, seg_path: Path, embs: dict, seg_embs: list, turns: list, rename: dict[str, str],
+            args) -> None:
+    """목소리 사이드카를 남기고, 목소리 DB가 있으면 화자에 실명을 붙인다."""
+    from . import voices
+    side = voices.sidecar_path(seg_path)
+    voices.save_sidecar(side, embs, turns, rename, seg_embs)
+    if not args.no_voices and (n := voices.annotate(t, side)):
+        log(f"목소리 DB: 화자 {n}명에 이름 붙임")
 
 
 # `rec2md <서브커맨드> ...`는 rec2md.cmd_<이름>.main(argv)로 넘긴다. 그 외 인자는 전사 대상 파일
@@ -109,6 +124,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--speakers", type=int, help="화자 수를 알면 지정 (정확도 향상)")
     p.add_argument("--no-diarize", action="store_true", help="화자분리 생략 (말소리 구간 청킹도 같이 꺼짐)")
     p.add_argument("--no-vad", action="store_true", help="말소리 구간 청킹 없이 파일 전체를 한 번에 전사")
+    p.add_argument("--no-voices", action="store_true", help="목소리 DB로 화자 실명 붙이기 생략")
     p.add_argument("--out", help="출력 폴더 (기본: 원본 옆)")
     p.add_argument("--series", help="회의 시리즈 맥락 (~/.config/rec2md/series/<이름>, rec2md series init)")
     p.add_argument("--context", action="append", type=Path,

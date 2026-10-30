@@ -24,12 +24,17 @@ office = [
     "docxtpl>=0.18",
     "python-docx>=1.1",
 ]
+voices = [
+    "numpy>=1.24",
+    "scipy>=1.10",  # 헝가리안 매칭 (pyannote가 이미 끌어옴)
+]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
-    "rapidfuzz>=3.0",
-]  # scripts/compare.py
+    "rapidfuzz>=3.0",  # scripts/compare.py
+    "rec2md[voices]",  # tests/test_voices.py (CI는 dev 그룹만 설치)
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
