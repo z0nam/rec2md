@@ -19,6 +19,10 @@ LENGTHS = {
 }
 
 
+# 긴 무음을 뺀 추정 말소리 길이 (없으면 파일 길이와 같음)
+SPEECH: dict[str, float] = {}
+
+
 @pytest.fixture
 def folder(tmp_path, monkeypatch):
     d = tmp_path / "rec"
@@ -36,6 +40,8 @@ def folder(tmp_path, monkeypatch):
         return sec
 
     monkeypatch.setattr(cmd_batch.audio, "probe_duration", probe)
+    # 말소리 추정(소리 크기)은 기본으로 파일 길이 그대로, SPEECH에 있으면 그 값
+    monkeypatch.setattr(cmd_batch, "speech_sec", lambda path: SPEECH.get(path.name, LENGTHS.get(path.name)))
     return d
 
 
@@ -73,7 +79,7 @@ def test_dry_run_reports_and_does_nothing(folder, calls, capsys):
     assert rows["d_allday.mp3"].endswith(cmd_batch.SPLIT)
     assert rows["e_broken.mp4"].endswith(cmd_batch.BROKEN)
     # 처리 대상 2개(30분+10분), local 12배 가정 → 약 3분 20초
-    assert "처리 대상 2개 · 총 00:40:00 · local 예상 처리시간 약 00:03:20" in out
+    assert "처리 대상 2개 · 말소리 총 00:40:00 · local 예상 처리시간 약 00:03:20" in out
     assert "분할이 필요해" in out
 
 
@@ -117,7 +123,7 @@ def test_dry_run_shows_retry_and_done(folder, calls, capsys):
     out = capsys.readouterr().out
     assert any(line.startswith("a_meeting.mp3") and line.endswith(cmd_batch.DONE) for line in out.splitlines())
     assert any(line.startswith("b_call.M4A") and line.endswith(cmd_batch.RETRY) for line in out.splitlines())
-    assert "처리 대상 1개 · 총 00:10:00" in out
+    assert "처리 대상 1개 · 말소리 총 00:10:00" in out
 
 
 def test_options_pass_through_and_out_dir(folder, calls, tmp_path, monkeypatch):
@@ -226,3 +232,26 @@ def test_moved_source_folder_still_resumes(folder, calls, tmp_path):
             cmd_batch.main([str(moved), "--out", str(out)])
     finally:
         LENGTHS["a_meeting.mp3"] = old
+
+
+def test_long_recording_with_mostly_silence_is_processed(folder, calls, capsys):
+    """6시간 녹음이라도 녹음기를 안 꺼서 생긴 무음을 빼면 2시간이면 처리 대상이다. 분할 판단은 말소리 길이로."""
+    (folder / "f_forgot.mp3").write_bytes(b"")
+    LENGTHS["f_forgot.mp3"] = 6 * 3600.0
+    SPEECH["f_forgot.mp3"] = 2 * 3600.0
+    try:
+        cmd_batch.main([str(folder), "--dry-run"])
+        out = capsys.readouterr().out
+        row = next(line for line in out.splitlines() if line.startswith("f_forgot.mp3"))
+        assert "06:00:00" in row and "02:00:00" in row and row.endswith(cmd_batch.TODO)
+        assert any(line.startswith("d_allday.mp3") and line.endswith(cmd_batch.SPLIT) for line in out.splitlines())
+        assert "말소리 총 02:40:00" in out and "긴 무음 04:00:00는 전사 전에 잘라냄" in out
+        # --no-trim이면 무음을 자르지 않으니 추정하지 않고 파일 길이로 판단 → 분할 필요
+        cmd_batch.main([str(folder), "--dry-run", "--no-trim"])
+        row = next(line for line in capsys.readouterr().out.splitlines() if line.startswith("f_forgot.mp3"))
+        assert row.endswith(cmd_batch.SPLIT)
+        seen, _ = calls
+        cmd_batch.main([str(folder)])
+        assert "f_forgot.mp3" in seen
+    finally:
+        del LENGTHS["f_forgot.mp3"], SPEECH["f_forgot.mp3"]

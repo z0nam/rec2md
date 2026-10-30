@@ -47,6 +47,9 @@ def run_one(src: Path, args) -> Path:
         meta["initial_prompt"] = prompt
     with tempfile.TemporaryDirectory(prefix="rec2md-") as td:
         wav = audio.normalize(src, Path(td) / "audio.wav")
+        offsets = None
+        if not getattr(args, "no_trim", False):
+            wav, offsets = _trim_silence(wav, Path(td) / "trimmed.wav", meta)
 
         turns = regions = None
         embs: dict = {}
@@ -72,6 +75,11 @@ def run_one(src: Path, args) -> Path:
         rename: dict[str, str] = {}
         if turns is not None:
             segs = assign_speakers(segs, turns, rename)
+        if offsets is not None:  # 이어 붙인 오디오의 시각 → 원본 시각
+            from .trim import remap_segments, remap_spans
+            remap_segments(segs, offsets)
+            if turns is not None:
+                turns, seg_embs = remap_spans(turns, offsets), remap_spans(seg_embs, offsets)
 
     t = Transcript(source=src.name, duration=duration, engine=f"{engine.name}:{getattr(engine, 'model', '')}",
                    language=args.language, segments=segs, meta=meta)
@@ -89,6 +97,20 @@ def run_one(src: Path, args) -> Path:
         log(f"보정 후보 {n}건")
     log(f"→ {raw_path}")
     return raw_path
+
+
+def _trim_silence(wav: Path, out: Path, meta: dict):
+    """긴 무음(녹음기를 안 끈 공백)을 빼고 이어 붙인 wav를 만든다. 자를 게 없으면 (wav, None)."""
+    from . import trim
+    data = audio.load_wav(wav)
+    p = trim.plan(trim.loudness(data))
+    if not p.trims():
+        return wav, None
+    m = trim.OffsetMap(p.keep)
+    audio.write_wav(out, trim.cut_audio(data, p.keep))
+    meta["trim"] = trim.meta(p, m)
+    log(f"긴 무음 {len(p.cut)}곳 잘라냄: {fmt_ts(p.duration)} → {fmt_ts(p.kept_sec)} (임계 {p.threshold:.0f}dB)")
+    return out, m
 
 
 def _voices(t: Transcript, seg_path: Path, embs: dict, seg_embs: list, turns: list, rename: dict[str, str],
@@ -137,6 +159,8 @@ def build_parser(prog: str = "rec2md", inputs: bool = True) -> argparse.Argument
     p.add_argument("--no-diarize", action="store_true", help="화자분리 생략 (말소리 구간 청킹도 같이 꺼짐)")
     p.add_argument("--no-vad", action="store_true", help="말소리 구간 청킹 없이 파일 전체를 한 번에 전사")
     p.add_argument("--no-voices", action="store_true", help="목소리 DB로 화자 실명 붙이기 생략")
+    p.add_argument("--no-trim", action="store_true",
+                   help="5분 넘는 무음(녹음기를 안 끈 공백)을 잘라내지 않고 그대로 처리")
     p.add_argument("--out", help="출력 폴더 (기본: 원본 옆)")
     p.add_argument("--series", help="회의 시리즈 맥락 (~/.config/rec2md/series/<이름>, rec2md series init)")
     p.add_argument("--context", action="append", type=Path,
