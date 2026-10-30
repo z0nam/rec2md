@@ -10,8 +10,8 @@
 - 출력 이름이 겹치는 파일은 처리하지 않고 "이름 겹침"으로 표시한다: 같은 폴더의 `회의.mp3`·`회의.wav`(출력이
   둘 다 `회의.segments.json`), 또는 같은 출력 폴더를 이미 다른 원본(다른 폴더의 같은 이름 파일)이 쓴 경우.
 - 녹음기를 안 꺼서 생긴 긴 무음은 전사 전에 잘라낸다(`trim`, --no-trim으로 끔, 기준 길이는 --trim-min-gap). 그래서 dry-run은 파일 길이와
-  함께 소리 크기로 추정한 말소리 길이를 보여 주고, "분할 필요"(4시간 초과)도 말소리 길이로 판단한다.
-  잘라낸 뒤에도 4시간이 넘는 파일은 건너뛴다(청크 분할은 아직 없음).
+  함께 소리 크기로 추정한 말소리 길이를 보여 주고, "분할 필요"(6시간 초과)도 말소리 길이로 판단한다.
+  잘라낸 뒤에도 6시간이 넘는 파일은 건너뛴다(청크 분할은 아직 없음 — docs/PLAN.md 위시리스트).
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from .render import fmt_ts
 
 MEDIA_EXTS = {".mp3", ".m4a", ".wav", ".mp4", ".mov"}
 STATE_FILE = ".rec2md-state.json"
-MAX_SEC = 4 * 3600          # 이보다 길면 분할 필요
+MAX_SEC = 6 * 3600          # 이보다 길면 분할 필요. 6시간 실측 최대 메모리 근거는 docs/PLAN.md
 LOCAL_SPEED = 12.0          # local 엔진 처리 속도 가정(실시간 대비 배수, 이 맥 실측 근사)
 PROBE_WORKERS = 4           # 말소리 길이 추정(ffmpeg 디코드)을 동시에 돌릴 수
 
@@ -122,7 +122,7 @@ def plan(files: list[Path], state: dict, min_sec: float, estimate: bool = True,
     for i in todo:
         if i.work > MAX_SEC:
             i.plan = SPLIT
-        elif i.plan == SPLIT:  # 길이는 4시간을 넘지만 말소리는 그 안
+        elif i.plan == SPLIT:  # 길이는 MAX_SEC를 넘지만 말소리는 그 안
             st = state.get(i.path.name, {}).get("status")
             i.plan = RETRY if st == "failed" else TODO
     return items
@@ -177,7 +177,8 @@ def report(items: list[Item]) -> str:
     if cut > 0:
         lines.append(f"긴 무음 {fmt_ts(cut)}는 전사 전에 잘라냄(말소리 길이는 소리 크기로 추정)")
     if counts[SPLIT]:
-        lines.append(f"무음을 빼고도 4시간({fmt_ts(MAX_SEC)})을 넘는 {counts[SPLIT]}개는 분할이 필요해 이번에는 건너뜀")
+        lines.append(f"무음을 빼고도 {fmt_ts(MAX_SEC)}를 넘는 {counts[SPLIT]}개는 분할이 필요해 이번에는 건너뜀"
+                     "(청크 분할은 아직 없음)")
     if counts[CLASH]:
         lines.append(f"출력 이름이 겹치는 {counts[CLASH]}개는 처리하지 않음 — 파일 이름을 바꾸거나 --out을 따로 지정")
     return "\n".join(lines)

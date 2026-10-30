@@ -14,7 +14,7 @@ LENGTHS = {
     "a_meeting.mp3": 1800.0,
     "b_call.M4A": 600.0,          # 확장자 대소문자 무시
     "c_empty.wav": 5.0,           # min-sec 미만
-    "d_allday.mp3": 5 * 3600.0,   # 4시간 초과 → 분할 필요
+    "d_allday.mp3": 7 * 3600.0,   # 6시간 초과 → 분할 필요
     "e_broken.mp4": None,         # ffprobe 실패
 }
 
@@ -241,17 +241,17 @@ def test_moved_source_folder_still_resumes(folder, calls, tmp_path):
 
 
 def test_long_recording_with_mostly_silence_is_processed(folder, calls, capsys):
-    """6시간 녹음이라도 녹음기를 안 꺼서 생긴 무음을 빼면 2시간이면 처리 대상이다. 분할 판단은 말소리 길이로."""
+    """8시간 녹음이라도 녹음기를 안 꺼서 생긴 무음을 빼면 2시간이면 처리 대상이다. 분할 판단은 말소리 길이로."""
     (folder / "f_forgot.mp3").write_bytes(b"")
-    LENGTHS["f_forgot.mp3"] = 6 * 3600.0
+    LENGTHS["f_forgot.mp3"] = 8 * 3600.0
     SPEECH["f_forgot.mp3"] = 2 * 3600.0
     try:
         cmd_batch.main([str(folder), "--dry-run"])
         out = capsys.readouterr().out
         row = next(line for line in out.splitlines() if line.startswith("f_forgot.mp3"))
-        assert "06:00:00" in row and "02:00:00" in row and row.endswith(cmd_batch.TODO)
+        assert "08:00:00" in row and "02:00:00" in row and row.endswith(cmd_batch.TODO)
         assert any(line.startswith("d_allday.mp3") and line.endswith(cmd_batch.SPLIT) for line in out.splitlines())
-        assert "말소리 총 02:40:00" in out and "긴 무음 04:00:00는 전사 전에 잘라냄" in out
+        assert "말소리 총 02:40:00" in out and "긴 무음 06:00:00는 전사 전에 잘라냄" in out
         # --no-trim이면 무음을 자르지 않으니 추정하지 않고 파일 길이로 판단 → 분할 필요
         cmd_batch.main([str(folder), "--dry-run", "--no-trim"])
         row = next(line for line in capsys.readouterr().out.splitlines() if line.startswith("f_forgot.mp3"))
@@ -261,6 +261,18 @@ def test_long_recording_with_mostly_silence_is_processed(folder, calls, capsys):
         assert "f_forgot.mp3" in seen
     finally:
         del LENGTHS["f_forgot.mp3"], SPEECH["f_forgot.mp3"]
+
+
+def test_dense_recording_up_to_max_is_processed(folder, calls, capsys):
+    """무음이 거의 없는 5시간 회의도 한 번에 처리한다(한도 6시간, 근거는 docs/PLAN.md 실측)."""
+    (folder / "g_dense.mp3").write_bytes(b"")
+    LENGTHS["g_dense.mp3"] = SPEECH["g_dense.mp3"] = 5 * 3600.0
+    try:
+        cmd_batch.main([str(folder), "--dry-run"])
+        row = next(line for line in capsys.readouterr().out.splitlines() if line.startswith("g_dense.mp3"))
+        assert row.endswith(cmd_batch.TODO)
+    finally:
+        del LENGTHS["g_dense.mp3"], SPEECH["g_dense.mp3"]
 
 
 def test_trim_min_gap_reaches_speech_estimate(folder, capsys):
