@@ -16,3 +16,6 @@ local/
 _transcripts/
 .rec2md-state.json
 .env
+*.voices.npz
+*.minutes.json
+*.corrections.json

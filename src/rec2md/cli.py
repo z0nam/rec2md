@@ -64,8 +64,22 @@ def run_one(src: Path, args) -> Path:
     return raw_path
 
 
+# `rec2md <서브커맨드> ...`는 rec2md.cmd_<이름>.main(argv)로 넘긴다. 그 외 인자는 전사 대상 파일
+SUBCOMMANDS = {"voices", "render", "series"}
+
+
 def main(argv: list[str] | None = None) -> None:
     load_dotenv(ENV_FILE)
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] in SUBCOMMANDS:
+        import importlib
+        try:
+            mod = importlib.import_module(f".cmd_{argv[0]}", __package__)
+        except ModuleNotFoundError as e:
+            if e.name != f"{__package__}.cmd_{argv[0]}":  # 명령 모듈 안의 의존성 누락은 그대로 보여준다
+                raise
+            raise SystemExit(f"아직 구현되지 않은 명령: {argv[0]}") from e
+        return mod.main(argv[1:])
     p = argparse.ArgumentParser(prog="rec2md", description="녹음·영상 → 화자 구분 녹취록 Markdown")
     p.add_argument("inputs", nargs="+", type=Path, help="오디오/영상 파일 (mp3, m4a, wav, mp4, mov …)")
     p.add_argument("--engine", default="local", choices=["local"])
