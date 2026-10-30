@@ -101,7 +101,7 @@ def _voices(t: Transcript, seg_path: Path, embs: dict, seg_embs: list, turns: li
 
 
 # `rec2md <서브커맨드> ...`는 rec2md.cmd_<이름>.main(argv)로 넘긴다. 그 외 인자는 전사 대상 파일
-SUBCOMMANDS = {"voices", "render", "series", "bounds"}
+SUBCOMMANDS = {"voices", "render", "series", "bounds", "notes"}
 
 
 def main(argv: list[str] | None = None) -> None:

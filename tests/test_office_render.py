@@ -6,6 +6,7 @@ pdf·png 변환은 외부 도구(rhwp, rsvg-convert, LibreOffice)가 있을 때�
 
 from __future__ import annotations
 
+import html
 import re
 import shutil
 import xml.etree.ElementTree as ET
@@ -115,11 +116,111 @@ def test_hwpx_section_is_spliced_not_reserialized(minutes, tmp_path):
     out = render_hwpx(minutes, t, tmp_path / "out.hwpx")
     with zipfile.ZipFile(form) as a, zipfile.ZipFile(out) as b:
         src, dst = a.read("Contents/section0.xml").decode(), b.read("Contents/section0.xml").decode()
-        assert a.read("Contents/header.xml") == b.read("Contents/header.xml")
+        h_src, h_dst = a.read("Contents/header.xml").decode(), b.read("Contents/header.xml").decode()
+    # header는 내어쓰기 문단 모양을 덧붙인 것(과 그 개수) 말고는 원문 그대로다
+    last = max(int(i) for i in re.findall(r'<hh:paraPr id="(\d+)"', h_src))
+    added = "".join(m.group(0) for m in re.finditer(r'<hh:paraPr id="(\d+)".*?</hh:paraPr>', h_dst, re.S)
+                    if int(m.group(1)) > last)
+    assert added
+    strip = lambda h: re.sub(r'(<hh:paraProperties itemCnt=")\d+', r"\1", h)  # noqa: E731
+    assert strip(h_dst.replace(added, "")) == strip(h_src)
     head = src[: src.index("<hp:tbl ")]
     assert dst.startswith(head.replace("{{doc_title}}", t.doc_title(minutes)))
     assert " />" not in dst  # ElementTree식 빈 태그가 끼어들지 않음
 
+
+def test_hwpx_cell_height_matches_preview_wrap(minutes, tmp_path):
+    """칸 높이 어림과 미리보기 줄바꿈이 같은 계산이라, 공백에서 끊겨 늘어난 줄도 칸 안에 든다 (Codex 리뷰 #18)."""
+    from rec2md.minutes import Item, Section
+
+    word = "가" * 23
+    minutes.summary, minutes.decisions, minutes.actions, minutes.next_meeting = [], [], [], ""
+    minutes.sections = [Section("긴 단어", [Item(" ".join([word] * 8)), Item("짧은 줄")])]
+    t = load_template("kr-standard")
+    entries = hwpx._read_zip(render_hwpx(minutes, t, tmp_path / "out.hwpx"))
+    xml = entries["Contents/section0.xml"].decode("utf-8")
+    header = entries["Contents/header.xml"]
+    cached = hwpx._layout_cache(xml, hwpx._metrics(header))
+    root = hwpx._tree(cached)
+    cell = next(tc for tc in hwpx._walk(root, "tc") if word in hwpx._cell_text(cached, tc))
+    height = int(hwpx._attrs(hwpx._own(cached, cell, "cellSz").group(0))["height"])
+    last = re.findall(r'vertpos="(\d+)" vertsize="(\d+)"', cached[cell.start:cell.end])[-1]
+    assert int(last[0]) + int(last[1]) <= height
+
+
+def _content_paras(sec: str):
+    return re.findall(r'<hp:p [^>]*paraPrIDRef="(\d+)" styleIDRef="(\d+)"[^>]*><hp:run[^>]*><hp:t>([^<]*)</hp:t>', sec)
+
+
+@pytest.mark.parametrize("name", TEMPLATES)
+def test_hwpx_level_styles(minutes, tmp_path, name):
+    """회의내용 단계마다 [hwpx.styles]의 문단 스타일을 쓴다. 양식에 없으면 내어쓰기 스타일로 만들어 넣는다."""
+    t = load_template(name)
+    with zipfile.ZipFile(render_hwpx(minutes, t, tmp_path / "out.hwpx")) as z:
+        header, sec = z.read("Contents/header.xml").decode(), z.read("Contents/section0.xml").decode()
+    styles = {a["id"]: a for a in (dict(re.findall(r'(\w+)="([^"]*)"', s)) for s in re.findall(r"<hh:style [^>]*>", header))}
+    intent = {i: int(v) for i, v in re.findall(r'<hh:paraPr id="(\d+)".*?<hc:intent value="(-?\d+)"', header, re.S)}
+    specs = t.data["hwpx"]["styles"]["content"]
+    name_of = lambda s: s if isinstance(s, str) else s["style"]  # noqa: E731
+    by_text = {html.escape(str(x), quote=False): x for x in t.content_lines(minutes)}
+    seen = 0
+    for ppr, sid, text in _content_paras(sec):
+        if text in by_text:
+            x = by_text[text]
+            assert styles[sid]["name"] == name_of(specs[min(x.level, len(specs) - 1)])
+            assert intent[ppr] < 0  # 둘째 줄이 기호 뒤 글자에 맞게 내어쓰기
+            seen += 1
+    assert seen == len(by_text)
+
+
+def test_hwpx_auto_bullet_style_drops_text_marker(minutes, tmp_path):
+    """스타일이 글머리표를 스스로 붙이면(heading type BULLET) 텍스트의 기호는 빼고 번호는 남긴다."""
+    t = load_template("kr-standard")
+    form = build_form(t, tmp_path / "form.hwpx")
+    entries = hwpx._read_zip(form)
+    header = entries["Contents/header.xml"].decode()
+    sid_pp = re.search(r'<hh:style [^>]*name="회의내용 2단" [^>]*paraPrIDRef="(\d+)"', header).group(1)
+    header = re.sub(rf'(<hh:paraPr id="{sid_pp}".*?<hh:heading type=")NONE(")', r"\1BULLET\2", header, count=1, flags=re.S)
+    entries["Contents/header.xml"] = header.encode()
+    user = tmp_path / "user-templates" / "kr-standard"
+    user.mkdir(parents=True)
+    hwpx._write_zip(form, user / "form.hwpx", entries, preview="")
+    t2 = load_template("kr-standard")
+    text = hwpx_text(render_hwpx(minutes, t2, tmp_path / "out.hwpx"))
+    for x in t2.content_lines(minutes):
+        if x.level == 1:
+            assert x.text in text and str(x) not in text  # "- " 없이
+        if x.level == 0:
+            assert str(x) in text  # "1. " 번호는 남음
+
+
+def test_hwpx_attendee_hanging_indent(minutes, tmp_path):
+    """스타일이 없는 칸(참석자)의 "- 이름" 줄은 기호 폭만큼 내어쓰는 문단 모양을 복제해 쓴다. 같은 모양은 한 번만."""
+    t = load_template("ji")
+    with zipfile.ZipFile(render_hwpx(minutes, t, tmp_path / "out.hwpx")) as z:
+        header, sec = z.read("Contents/header.xml").decode(), z.read("Contents/section0.xml").decode()
+    intent = {i: int(v) for i, v in re.findall(r'<hh:paraPr id="(\d+)".*?<hc:intent value="(-?\d+)"', header, re.S)}
+    dashes = [ppr for ppr, _, text in _content_paras(sec) if text.startswith("- ")]
+    assert dashes and all(intent[p] < 0 for p in dashes)
+    assert len(re.findall(r'<hh:paraPr id="(\d+)"', header)) == len(set(re.findall(r'<hh:paraPr id="(\d+)"', header)))
+
+
+def test_docx_level_styles(minutes, tmp_path):
+    """docx 회의내용도 단계마다 [docx.styles]의 문단 스타일. 목록 스타일(List Bullet)은 텍스트 기호를 뺀다."""
+    docx = pytest.importorskip("docx")
+    from rec2md.render.docx import render_docx
+
+    for name in TEMPLATES:
+        t = load_template(name)
+        doc = docx.Document(str(render_docx(minutes, t, tmp_path / f"{name}.docx")))
+        paras = [p for tbl in doc.tables for row in tbl.rows for c in row.cells for p in c.paragraphs]
+        names = t.data["docx"]["styles"]["content"]
+        for x in t.content_lines(minutes):
+            want = names[min(x.level, len(names) - 1)]
+            hit = [p for p in paras if p.style.name == want and p.text in (str(x), x.text)]
+            assert hit, (name, str(x))
+        custom = [doc.styles[n] for n in names if n.startswith("회의내용")]
+        assert all(s.paragraph_format.first_line_indent < 0 for s in custom)
 
 def test_hwpx_below_and_nested_tables():
     """라벨 아래 칸(where=below) 찾기, 안쪽 표의 칸은 바깥 표의 이웃으로 치지 않기."""
@@ -146,11 +247,28 @@ def test_hwpx_preview_is_scrubbed(minutes, tmp_path):
         assert minutes.place in z.read("Preview/PrvText.txt").decode("utf-8")
 
 
-def test_rhwp_workaround_only_multi_paragraph_top_cells():
-    xml = ('<hp:subList vertAlign="TOP"><hp:p a="1"></hp:p><hp:p a="2"></hp:p></hp:subList>'
-           '<hp:subList vertAlign="TOP"><hp:p a="1"></hp:p></hp:subList>')
-    out = hwpx._rhwp_workaround(xml)
-    assert out.count('vertAlign="CENTER"') == 1 and out.count('vertAlign="TOP"') == 1
+def test_wrap_breaks_at_spaces():
+    # 글자 크기 1000, 폭 4000: 한글 4자가 한 줄
+    assert hwpx._wrap("가나 다라마바", 1000, 4000) == [0, 3]
+    assert hwpx._wrap("가나다라마바사", 1000, 4000) == [0, 4]  # 공백이 없으면 글자에서
+    assert hwpx._wrap("", 1000, 4000) == [0]
+
+
+def test_layout_cache_only_in_preview_and_multi_paragraph_cells(minutes, tmp_path):
+    """미리보기 사본에서만, 문단이 여럿인 칸의 캐시 없는 문단에 어림한 linesegarray를 넣는다."""
+    t = load_template("kr-standard")
+    out = render_hwpx(minutes, t, tmp_path / "out.hwpx")
+    entries = hwpx._read_zip(out)
+    xml = entries["Contents/section0.xml"].decode("utf-8")
+    assert "<hp:linesegarray>" not in xml  # 결과 hwpx에는 넣지 않는다
+    metrics = hwpx._metrics(entries["Contents/header.xml"])
+    cached = hwpx._layout_cache(xml, metrics)
+    root = hwpx._tree(cached)
+    for tc in hwpx._walk(root, "tc"):
+        ps = hwpx._paras(tc)
+        assert all((hwpx._own_lineseg(cached, p) is not None) == (len(ps) > 1) for p in ps)
+    assert hwpx._layout_cache(cached, metrics) == cached  # 두 번 넣지 않음
+    ET.fromstring(cached)
 
 
 @pytest.mark.skipif(not (hwpx.find_rhwp() and shutil.which("rsvg-convert")), reason="rhwp, rsvg-convert 없음")
@@ -184,8 +302,13 @@ def test_docx_built(minutes, tmp_path, name):
     assert t.doc_title(minutes) in text
     for f in t.fields:
         assert f.label in text
-    for line in expected_lines(minutes, t):
-        assert line in text, line
+    vals = t.values(minutes)
+    for f in t.fields:
+        if f.value != "content":
+            for line in vals[f.value]:
+                assert line in text, line
+    for x in t.content_lines(minutes):  # 목록 스타일은 기호를 스스로 붙이므로 글만 본다
+        assert x.text in text, x.text
 
 
 def test_docx_user_form(minutes, tmp_path):
