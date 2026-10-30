@@ -83,9 +83,11 @@ def fill_form(form: Path, cells: dict[str, tuple[str, Lines]], out: Path,
     texts: list[str] = []
     for name, data in entries.items():
         if SECTION_RE.fullmatch(name):
-            xml, hit = _fill_section(data.decode("utf-8"), cells, metrics)
+            xml = data.decode("utf-8")
+            # 자리표시자는 양식에서 먼저 바꾼다 — 채운 값에 든 `{{…}}` 글자는 그대로 둬야 한다
             if placeholders:
                 xml = _replace_placeholders(xml, placeholders)
+            xml, hit = _fill_section(xml, cells, metrics)
             entries[name] = xml.encode("utf-8")
             found |= hit
             texts.append(_plain(xml))

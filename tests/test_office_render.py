@@ -91,6 +91,15 @@ def test_hwpx_fill_user_form(minutes, tmp_path, monkeypatch):
         assert line in text, line
 
 
+def test_hwpx_values_with_placeholder_text(minutes, tmp_path):
+    """회의 값에 든 `{{title}}` 같은 글자는 자리표시자로 치지 않는다 (자리표시자는 양식에서만 바꾼다)."""
+    minutes.place = "Discuss {{title}} and {{place}} placeholders"
+    t = load_template("kr-standard")
+    text = hwpx_text(render_hwpx(minutes, t, tmp_path / "out.hwpx"))
+    assert minutes.place in text
+    assert t.doc_title(minutes) in text  # 양식의 {{doc_title}}은 바뀐다
+
+
 def test_hwpx_missing_label(minutes, tmp_path):
     t = load_template("kr-standard")
     form = build_form(t, tmp_path / "form.hwpx")
