@@ -55,6 +55,6 @@ def test_bounds_and_non_names():
     assert ev._parse_bounds(["x=1:00-"])["x"] == (60.0, float("inf"))
     assert ev._clip_bounds([(0, 10, "S0"), (2970, 2990, "S1"), (3000, 3010, "S2")], 0, 2980) == \
         [(0, 10, "S0"), (2970, 2980, "S1")]
-    for label in ["미지정 1", "제주도청 주무관님 (성함확인필요)", "Attendees 3", "00:00 ~"]:
+    for label in ["미지정 1", "○○기관 담당자님 (성함확인필요)", "Attendees 3", "00:00 ~"]:
         assert ev.NOT_A_NAME.search(label)
     assert not ev.NOT_A_NAME.search("홍길동")
