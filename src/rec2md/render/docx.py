@@ -120,20 +120,60 @@ def _build(m: Minutes, template, out: Path) -> Path:
                 lines = [(1, s, "- ") if f.value == "attendees" and s.startswith("- ") else (0, s)
                          for s in vals[f.value]]
                 value.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-            _fill_cell(value, lines)
+            _fill_cell(value, lines, _level_styles(doc, template, f.value))
     doc.core_properties.title = m.title
     doc.core_properties.author = ""
     doc.save(str(out))
     return out
 
 
-def _fill_cell(cell, lines: list[tuple]) -> None:
-    """줄마다 문단 하나. (단계, 글[, 머리기호]) — 머리기호가 있으면 둘째 줄이 기호 뒤 글자에 맞게 내어쓴다."""
+def _level_styles(doc, template, value: str) -> list | None:
+    """`[docx.styles]`의 단계별 스타일 → [(스타일, 자동 글머리표인지)]. 문서에 없는 이름은 내어쓰기 스타일로 만든다.
+
+    목록 스타일(`List Bullet` 등, 번호 매기기가 걸린 스타일)은 기호를 스스로 붙이므로 텍스트의 기호를 뺀다.
+    """
+    from docx.enum.style import WD_STYLE_TYPE
+    from docx.oxml.ns import qn
+    from docx.shared import Mm, Pt
+
+    names = template.data.get("docx", {}).get("styles", {}).get(value)
+    if not names:
+        return None
+    st = getattr(template, "content", None)
+    prefixes = [st.heading.replace("{n}", "1"), st.item, st.child] if st else ["1. ", "- ", "· "]
+    out = []
+    for level, name in enumerate(names):
+        try:
+            style = doc.styles[name]
+        except KeyError:
+            style = doc.styles.add_style(name, WD_STYLE_TYPE.PARAGRAPH)
+            style.base_style = doc.styles["Normal"]
+            hang = Pt(_marker_width_pt(prefixes[min(level, len(prefixes) - 1)], FONT_PT))
+            style.paragraph_format.left_indent = Mm(LEVEL_INDENT_MM * level) + hang
+            style.paragraph_format.first_line_indent = -hang
+        ppr = style.element.pPr
+        auto = ppr is not None and ppr.find(qn("w:numPr")) is not None
+        out.append((style, auto))
+    return out
+
+
+def _fill_cell(cell, lines: list[tuple], styles: list | None = None) -> None:
+    """줄마다 문단 하나. (단계, 글[, 머리기호]) — 머리기호가 있으면 둘째 줄이 기호 뒤 글자에 맞게 내어쓴다.
+
+    `styles`가 있으면 단계마다 그 문단 스타일을 쓴다(들여쓰기·내어쓰기는 스타일이 맡는다).
+    """
     from docx.shared import Mm, Pt
 
     first = cell.paragraphs[0]
     for i, (level, text, *prefix) in enumerate(lines or [(0, "")]):
         p = first if i == 0 else cell.add_paragraph()
+        if styles:
+            style, auto = styles[min(level, len(styles) - 1)]
+            p.style = style
+            if auto and prefix and prefix[0] and not any(ch.isdigit() for ch in prefix[0]):
+                text = text[len(prefix[0]):]  # 목록 스타일이 붙이는 기호와 겹치지 않게
+            p.add_run(text)
+            continue
         p.add_run(text)
         left = Mm(LEVEL_INDENT_MM * level)
         hang = Pt(_marker_width_pt(prefix[0], FONT_PT)) if prefix and prefix[0].strip() else 0
