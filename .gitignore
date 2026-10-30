@@ -32,3 +32,6 @@ glossary.txt
 # 회사 양식 원본(hwpx·docx)은 레포에 두지 않는다. 내장 ji 양식은 template.toml만 둔다
 src/rec2md/templates/ji/*.hwpx
 src/rec2md/templates/ji/*.docx
+# 판정 사례·답(실데이터에서 만든 것)
+*.cases.json
+*.answers.json

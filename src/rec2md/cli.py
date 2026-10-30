@@ -15,12 +15,21 @@ from .clean import collapse_repeats, drop_known_hallucinations
 from .engines import get_engine
 from .render import fmt_ts, render_raw
 from .segments import Transcript
+from .series import build_prompt
 
 ENV_FILE = Path.home() / ".config" / "rec2md" / ".env"
 
 
 def log(msg: str) -> None:
     print(f"[rec2md] {msg}", file=sys.stderr, flush=True)
+
+
+def load_context(args):
+    from .series import Context, load_docs, load_series
+    ctx = load_series(args.series) if args.series else Context()
+    if args.context:
+        ctx = ctx.merge(load_docs(args.context))
+    return ctx
 
 
 def run_one(src: Path, args) -> Path:
@@ -32,6 +41,10 @@ def run_one(src: Path, args) -> Path:
     duration = audio.probe_duration(src)
     log(f"{src.name} ({fmt_ts(duration)})")
     meta: dict = {}
+    ctx = load_context(args)
+    prompt = build_prompt(ctx) if ctx and args.prompt else None
+    if prompt:
+        meta["initial_prompt"] = prompt
     with tempfile.TemporaryDirectory(prefix="rec2md-") as td:
         wav = audio.normalize(src, Path(td) / "audio.wav")
 
@@ -47,8 +60,8 @@ def run_one(src: Path, args) -> Path:
             regions = None if args.no_vad else speech_regions(turns)
 
         t0 = time.monotonic()
-        engine = get_engine(args.engine, model=args.model)
-        segs = drop_known_hallucinations(collapse_repeats(engine.transcribe(wav, args.language, regions)))
+        engine = get_engine(args.engine, model=args.model, prompt=prompt)
+        segs = drop_known_hallucinations(collapse_repeats(engine.transcribe(wav, args.language, regions)), prompt)
         meta["asr_sec"] = round(time.monotonic() - t0, 1)
         meta["vad"] = regions is not None
         log(f"전사 {meta['asr_sec']}s (실시간 대비 {duration / max(meta['asr_sec'], 0.1):.1f}배)")
@@ -60,6 +73,10 @@ def run_one(src: Path, args) -> Path:
                    language=args.language, segments=segs, meta=meta)
     t.to_json(seg_path)
     raw_path.write_text(render_raw(t, src.stem), encoding="utf-8")
+    if ctx:
+        from .corrections import write_corrections
+        n = write_corrections(t, ctx, out_dir / f"{src.stem}.corrections.json", args.series)
+        log(f"보정 후보 {n}건")
     log(f"→ {raw_path}")
     return raw_path
 
@@ -89,6 +106,11 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--no-diarize", action="store_true", help="화자분리 생략 (말소리 구간 청킹도 같이 꺼짐)")
     p.add_argument("--no-vad", action="store_true", help="말소리 구간 청킹 없이 파일 전체를 한 번에 전사")
     p.add_argument("--out", help="출력 폴더 (기본: 원본 옆)")
+    p.add_argument("--series", help="회의 시리즈 맥락 (~/.config/rec2md/series/<이름>, rec2md series init)")
+    p.add_argument("--context", action="append", type=Path,
+                   help="이번 회의 자료 (md·txt·hwpx·docx·pdf) → 용어 후보. 여러 개면 반복")
+    p.add_argument("--no-prompt", dest="prompt", action="store_false",
+                   help="맥락을 Whisper initial_prompt로 넘기지 않음 (보정 후보 추출만)")
     args = p.parse_args(argv)
 
     for src in args.inputs:
