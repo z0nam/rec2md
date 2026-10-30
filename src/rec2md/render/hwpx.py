@@ -31,7 +31,8 @@ from pathlib import Path
 
 from ..minutes import Minutes
 
-Lines = list[tuple[int, str]]
+# 칸에 넣을 줄: (단계, 글[, 머리기호]). 머리기호(글의 앞부분)가 있으면 둘째 줄부터 그 폭만큼 내어쓴다
+Lines = list[tuple]
 
 SECTION_RE = re.compile(r"Contents/section\d+\.xml")
 PLACEHOLDER_RE = re.compile(r"\{\{\s*(\w+)\s*\}\}")
@@ -58,27 +59,33 @@ def render_hwpx(m: Minutes, template, out: Path) -> Path:
         return fill_form(form, _cells(m, template, vals, built=True), out, ph)
 
 
-def _cells(m: Minutes, template, vals: dict[str, list[str]], built: bool = False) -> dict[str, tuple[str, Lines]]:
-    """라벨 → (방향, 줄). `built`면 build_form이 만든 표라 label 오른쪽이 값 칸이다(anchor·where는 원본 양식용)."""
-    cells: dict[str, tuple[str, Lines]] = {}
+def _cells(m: Minutes, template, vals: dict[str, list[str]], built: bool = False) -> dict[str, tuple]:
+    """라벨 → (방향, 줄[, 단계별 스타일]). `built`면 build_form이 만든 표라 label 오른쪽이 값 칸이다
+    (anchor·where는 원본 양식용). 단계별 스타일은 `[hwpx.styles]`에서 값 키로 찾는다."""
+    styles = template.data.get("hwpx", {}).get("styles", {})
+    cells: dict[str, tuple] = {}
     for f in template.fields:
         if f.value == "content":
-            lines = [(x.level, str(x)) for x in template.content_lines(m)]
+            lines = [(x.level, str(x), x.prefix) for x in template.content_lines(m)]
         elif f.value == "attendees":  # 소속 줄(0) 아래 "- 이름" 줄(1)
-            lines = [(1 if s.startswith("- ") else 0, s) for s in vals["attendees"]]
+            lines = [(1, s, "- ") if s.startswith("- ") else (0, s) for s in vals["attendees"]]
         else:
             lines = [(0, s) for s in vals[f.value]]
-        cells[f.label if built else f.anchor] = ("right" if built else f.where, lines)
+        cells[f.label if built else f.anchor] = ("right" if built else f.where, lines, styles.get(f.value))
     return cells
 
 
 # ── 채우기 ────────────────────────────────────────────────────────────
 
-def fill_form(form: Path, cells: dict[str, tuple[str, Lines]], out: Path,
+def fill_form(form: Path, cells: dict[str, tuple], out: Path,
               placeholders: dict[str, str] | None = None, required: bool = True) -> Path:
-    """`cells`: 라벨 → (방향 "right"|"below", 줄 목록). `required`면 찾지 못한 라벨은 KeyError."""
+    """`cells`: 라벨 → (방향 "right"|"below", 줄 목록[, 단계별 스타일]). `required`면 찾지 못한 라벨은 KeyError.
+
+    단계별 스타일은 양식의 문단 스타일 이름 목록(`"■"` 또는 `{style = "-_하위본문", indent = 2000}`)이다."""
     entries = _read_zip(form)
-    metrics = _metrics(entries.get("Contents/header.xml", b""))
+    header = entries.get("Contents/header.xml", b"").decode("utf-8")
+    metrics = _metrics(header.encode("utf-8"))
+    hang = _Header(header, metrics[0])
     found: set[str] = set()
     texts: list[str] = []
     for name, data in entries.items():
@@ -87,10 +94,12 @@ def fill_form(form: Path, cells: dict[str, tuple[str, Lines]], out: Path,
             # 자리표시자는 양식에서 먼저 바꾼다 — 채운 값에 든 `{{…}}` 글자는 그대로 둬야 한다
             if placeholders:
                 xml = _replace_placeholders(xml, placeholders)
-            xml, hit = _fill_section(xml, cells, metrics)
+            xml, hit = _fill_section(xml, cells, metrics, hang)
             entries[name] = xml.encode("utf-8")
             found |= hit
             texts.append(_plain(xml))
+    if hang.added:
+        entries["Contents/header.xml"] = hang.render().encode("utf-8")
     if required and (missing := set(cells) - found):
         raise KeyError(f"양식에서 라벨을 찾지 못함: {', '.join(sorted(missing))}")
     _write_zip(form, Path(out), entries, preview="\n".join(texts))
@@ -213,6 +222,81 @@ def _targets(xml: str, root: _Node, labels: dict[str, str]) -> dict[str, _Node]:
     return out
 
 
+class _Header:
+    """채우면서 필요한 문단 모양을 header.xml에 덧붙인다(원본 문단 모양을 복제해 일부 값만 바꿈).
+
+    - 내어쓰기: 머리기호 폭만큼 `intent`를 음수로 — 둘째 줄이 기호 뒤 글자에 맞는다.
+    - 단계 스타일: 양식에 정의된 문단 스타일(`■`, `-_하위본문` …)로 문단을 만든다. 같은 스타일을 더 깊은
+      단계에도 쓸 때는 왼쪽 여백만 더한 복제본을 쓴다.
+    """
+
+    def __init__(self, header: str, chars: dict[str, int]):
+        self.header, self.chars = header, chars
+        ids = [int(i) for i in re.findall(r'<hh:paraPr id="(\d+)"', header)]
+        self.next_id = max(ids, default=-1) + 1
+        self.made: dict[tuple, int] = {}
+        self.added: list[str] = []
+        self.styles = {a["name"]: a for a in (_attrs(t) for t in re.findall(r"<hh:style [^>]*>", header))
+                       if a.get("type") == "PARA"}
+
+    def render(self) -> str:
+        return _bump(self.header, "paraProperties", "".join(self.added)) if self.added else self.header
+
+    def _clone(self, base: str, intent: int | None = None, left_add: int = 0) -> str:
+        key = (base, intent, left_add)
+        if key not in self.made:
+            body = re.search(rf'<hh:paraPr id="{base}".*?</hh:paraPr>', self.header, re.S)
+            if body is None:
+                return base
+            new_id = self.next_id
+            self.next_id += 1
+            clone = re.sub(r'id="\d+"', f'id="{new_id}"', body.group(0), count=1)
+            if intent is not None:
+                clone = re.sub(r'(<hc:intent value=")-?\d+(")', rf'\g<1>{intent}\2', clone)
+            if left_add:
+                clone = re.sub(r'(<hc:left value=")(-?\d+)(")',
+                               lambda mt: f"{mt.group(1)}{int(mt.group(2)) + left_add}{mt.group(3)}", clone)
+            self.made[key] = new_id
+            self.added.append(clone)
+        return str(self.made[key])
+
+    def apply(self, proto: str, prefix: str) -> str:
+        """견본 문단을 머리기호 폭만큼 내어쓰는 문단 모양으로 바꾼다."""
+        open_tag = re.match(r"<hp:p\b[^>]*>", proto).group(0)
+        base = _attrs(open_tag).get("paraPrIDRef", "0")
+        run = RUN_RE.search(proto)
+        size = self.chars.get(_attrs(run.group(1)).get("charPrIDRef", "0"), 1000) if run else 1000
+        new = self._clone(base, intent=-int(_marker_width(prefix, size)))
+        new_tag = re.sub(r'paraPrIDRef="\d+"', f'paraPrIDRef="{new}"', open_tag, count=1)
+        return new_tag + proto[len(open_tag):]
+
+    def auto_marker(self, ppr: str) -> bool:
+        """문단 모양이 글머리표·번호를 스스로 붙이는지 (heading type이 NONE이 아님)."""
+        body = re.search(rf'<hh:paraPr id="{ppr}".*?</hh:paraPr>', self.header, re.S)
+        head = re.search(r'<hh:heading type="(\w+)"', body.group(0)) if body else None
+        return bool(head) and head.group(1) != "NONE"
+
+    def styled(self, spec, text: str, prefix: str) -> str | None:
+        """단계 스타일로 문단을 만든다. 양식에 그 스타일이 없으면 None(견본 문단 방식으로 돌아감)."""
+        name, indent = (spec, 0) if isinstance(spec, str) else (spec.get("style", ""), int(spec.get("indent", 0)))
+        st = self.styles.get(name)
+        if st is None:
+            return None
+        ppr = st.get("paraPrIDRef", "0")
+        if self.auto_marker(ppr) and prefix and not any(ch.isdigit() for ch in prefix):
+            text = text[len(prefix):]  # 스타일이 붙이는 기호와 겹치지 않게 (번호는 남긴다)
+        if indent:
+            ppr = self._clone(ppr, left_add=indent)
+        t = f"<hp:t>{html.escape(text, quote=False)}</hp:t>" if text else "<hp:t/>"
+        return (f'<hp:p id="2147483648" paraPrIDRef="{ppr}" styleIDRef="{st["id"]}" pageBreak="0" '
+                f'columnBreak="0" merged="0"><hp:run charPrIDRef="{st.get("charPrIDRef", "0")}">{t}</hp:run></hp:p>')
+
+
+def _marker_width(prefix: str, size: int) -> float:
+    """머리기호 폭(HWPUNIT) 어림. 도형·화살표·한글은 글자 크기만큼, 숫자·기호·공백은 절반."""
+    return sum(size if ord(ch) >= 0x2190 else size * 0.5 for ch in prefix)
+
+
 def _para_like(proto: str, text: str) -> str:
     """견본 문단(원문 문자열)의 문단·글자 모양으로 글 한 줄짜리 새 문단을 만든다."""
     open_tag = re.match(r"<hp:p\b[^>]*>", proto).group(0)
@@ -241,7 +325,7 @@ def _pick_protos(xml: str, ps: list[_Node], marks: list[str] | None) -> list[_No
     return keep
 
 
-def _fill_section(xml: str, cells: dict[str, tuple[str, Lines]], metrics) -> tuple[str, set[str]]:
+def _fill_section(xml: str, cells: dict[str, tuple], metrics, hang=None) -> tuple[str, set[str]]:
     root = _tree(xml)
     targets = _targets(xml, root, {k: v[0] for k, v in cells.items()})
     edits = []
@@ -249,7 +333,19 @@ def _fill_section(xml: str, cells: dict[str, tuple[str, Lines]], metrics) -> tup
     for key, tc in targets.items():
         ps = _paras(tc)
         protos = [xml[p.start:p.end] for p in ps]
-        new = [_para_like(protos[min(level, len(protos) - 1)], text) for level, text in cells[key][1] or [(0, "")]]
+        new = []
+        styles = cells[key][2] if len(cells[key]) > 2 else None
+        for level, text, *prefix in cells[key][1] or [(0, "")]:
+            prefix = prefix[0] if prefix else ""
+            if styles and hang is not None:
+                para = hang.styled(styles[min(level, len(styles) - 1)], text, prefix)
+                if para is not None:
+                    new.append(para)
+                    continue
+            proto = protos[min(level, len(protos) - 1)]
+            if prefix.strip() and hang is not None:
+                proto = hang.apply(proto, prefix)
+            new.append(_para_like(proto, text))
         edits.append((ps[0].start, ps[-1].end, "".join(new)))
         tbl = tc.parent
         need = _need_height(xml, tbl, tc, new, metrics)
@@ -302,7 +398,7 @@ def _need_height(xml: str, tbl: _Node, tc: _Node, paras: list[str], metrics) -> 
         kind, val, left = pprs.get(_attrs(re.match(r"<hp:p\b[^>]*>", p).group(0)).get("paraPrIDRef"),
                                    ("PERCENT", 160, 0))
         line = val if kind == "FIXED" else size * max(val, 100) // 100
-        n = max(1, -(-int(_text_width(_text(p, 0, len(p)), size)) // max(width - left, 1000)))
+        n = len(_wrap(_text(p, 0, len(p)), size, max(width - left, size)))  # 미리보기 캐시와 같은 줄바꿈
         need += n * line
     return need
 
@@ -505,14 +601,15 @@ def build_form(template, out: Path, skeleton: Path | None = None) -> Path:
     if skeleton is None:
         raise FileNotFoundError(f"hwpx 뼈대({SKELETON})가 없음")
     entries = _read_zip(skeleton)
-    entries["Contents/header.xml"] = _extend_header(entries["Contents/header.xml"].decode("utf-8")).encode("utf-8")
+    header = _extend_header(entries["Contents/header.xml"].decode("utf-8"))
+    entries["Contents/header.xml"] = _define_styles(header, template).encode("utf-8")
     entries["Contents/section0.xml"] = _form_section(entries["Contents/section0.xml"].decode("utf-8"),
                                                      template).encode("utf-8")
     _write_zip(skeleton, Path(out), entries, preview="")
     return Path(out)
 
 
-ITEM_TAGS = {"borderFills": "borderFill", "charProperties": "charPr", "paraProperties": "paraPr"}
+ITEM_TAGS = {"borderFills": "borderFill", "charProperties": "charPr", "paraProperties": "paraPr", "styles": "style"}
 
 
 def _bump(xml: str, tag: str, add: str) -> str:
@@ -552,6 +649,42 @@ def _extend_header(xml: str) -> str:
 
     return _bump(xml, "paraProperties",
                  pp(PP_CENTER, "CENTER") + pp(PP_L1, left=LEVEL_INDENT) + pp(PP_L2, left=2 * LEVEL_INDENT))
+
+
+def _define_styles(xml: str, template) -> str:
+    """`[hwpx.styles]`에 적힌 단계 스타일 중 뼈대에 없는 것을 내어쓰기 문단 스타일로 정의한다.
+
+    단계 i는 왼쪽 여백 i×LEVEL_INDENT, 첫 줄은 그 단계 머리기호(`[content]`의 접두) 폭만큼 내어쓴다.
+    자동 글머리표는 붙이지 않으므로 기호는 텍스트에 그대로 남는다.
+    """
+    specs = template.data.get("hwpx", {}).get("styles", {})
+    st = getattr(template, "content", None)
+    prefixes = [st.heading.replace("{n}", "1"), st.item, st.child] if st else ["1. ", "- ", "· "]
+    base_pp = re.search(r'<hh:paraPr id="0".*?</hh:paraPr>', xml, re.S).group(0)
+    pp_ids = [int(i) for i in re.findall(r'<hh:paraPr id="(\d+)"', xml)]
+    st_ids = [int(i) for i in re.findall(r'<hh:style id="(\d+)"', xml)]
+    names = set(re.findall(r'<hh:style [^>]*name="([^"]*)"', xml))
+    paras, styles = [], []
+    for levels in specs.values():
+        for level, spec in enumerate(levels):
+            name = spec if isinstance(spec, str) else spec.get("style", "")
+            if not name or name in names:
+                continue
+            names.add(name)
+            pid, sid = max(pp_ids) + 1, max(st_ids) + 1
+            pp_ids.append(pid)
+            st_ids.append(sid)
+            hang = int(_marker_width(prefixes[min(level, len(prefixes) - 1)], 1000))
+            body = re.sub(r'id="0"', f'id="{pid}"', base_pp, count=1)
+            body = body.replace('<hc:left value="0"', f'<hc:left value="{level * LEVEL_INDENT}"')
+            body = body.replace('<hc:intent value="0"', f'<hc:intent value="{-hang}"')
+            paras.append(body)
+            styles.append(f'<hh:style id="{sid}" type="PARA" name="{_xml_text(name)}" engName="" paraPrIDRef="{pid}" '
+                          f'charPrIDRef="0" nextStyleIDRef="{sid}" langID="1042" lockForm="0"/>')
+    if paras:
+        xml = _bump(xml, "paraProperties", "".join(paras))
+        xml = _bump(xml, "styles", "".join(styles))
+    return xml
 
 
 def _xml_text(s: str) -> str:
@@ -611,8 +744,10 @@ def _form_section(xml: str, template) -> str:
 
 # ── pdf·png (rhwp) ───────────────────────────────────────────────────
 # rhwp(https://github.com/edwardkim/rhwp)로 쪽마다 svg를 만든 뒤 rsvg-convert(librsvg)로 pdf·png.
-# rhwp는 세로 정렬이 TOP인 칸에 줄 배치 캐시 없는 문단이 여럿이면 한 줄에 겹쳐 그린다(v0.7.17).
-# 내보내기용 사본에서만 그런 칸을 CENTER로 바꿔 피한다 — 채운 칸은 높이를 맞춰 두었으므로 거의 같다.
+# rhwp(v0.7.17)는 줄 배치 캐시(linesegarray)가 없는 문단이 여럿인 칸을 제대로 못 그린다: TOP 정렬이면 한 줄에
+# 겹쳐 그리고, 칸이 쪽을 넘으면 문단마다 한 쪽씩 쓴다. 내보내기용 사본에서만 그런 칸의 문단마다 줄 배치를
+# 어림해 넣는다(`_layout_cache`). 결과 hwpx에는 넣지 않는다 — 한글은 캐시가 없으면 스스로 계산한다.
+# 한 문단짜리 칸은 rhwp가 스스로 줄을 바꾸므로 건드리지 않는다(어림한 줄바꿈이 오히려 어긋난다).
 
 RHWP_CANDIDATES = ["rhwp", str(Path.home() / ".local" / "bin" / "rhwp")]
 
@@ -636,9 +771,10 @@ def to_svg(src: Path, out_dir: Path) -> list[Path]:
     with tempfile.TemporaryDirectory(prefix="rec2md-rhwp-") as td:
         fixed = Path(td) / src.name
         entries = _read_zip(src)
+        metrics = _metrics(entries.get("Contents/header.xml", b""))
         for name, data in entries.items():
             if SECTION_RE.fullmatch(name):
-                entries[name] = _rhwp_workaround(data.decode("utf-8")).encode("utf-8")
+                entries[name] = _layout_cache(data.decode("utf-8"), metrics).encode("utf-8")
         _write_zip(src, fixed, entries, preview="")
         r = subprocess.run([rhwp, "export-svg", str(fixed), "-o", td, "--embed-fonts"],
                            capture_output=True, text=True, timeout=300)
@@ -653,12 +789,65 @@ def to_svg(src: Path, out_dir: Path) -> list[Path]:
         return outs
 
 
-def _rhwp_workaround(xml: str) -> str:
-    def fix(mt: re.Match) -> str:
-        sub = xml[mt.start():xml.index("</hp:subList>", mt.end())]
-        return mt.group(0).replace('vertAlign="TOP"', 'vertAlign="CENTER"') if sub.count("<hp:p ") > 1 else mt.group(0)
+def _layout_cache(xml: str, metrics) -> str:
+    """문단이 여럿인 칸에서 줄 배치 캐시가 없는 문단에 어림한 캐시를 넣는다(rhwp 미리보기용).
 
-    return re.sub(r'<hp:subList\b[^>]*vertAlign="TOP"[^>]*>', fix, xml)
+    줄바꿈 위치는 `_text_width`의 글자 폭 어림으로 정한다. 실제 글꼴 폭과 달라 줄 끝이 한두 글자
+    어긋날 수 있지만, 문단이 겹치거나 쪽마다 한 문단씩 흩어지지는 않는다.
+    """
+    chars, pprs = metrics
+    root = _tree(xml)
+    edits = []
+    for tc in _walk(root, "tc"):
+        sub = next((c for c in tc.children if c.kind == "subList"), None)
+        ps = [c for c in sub.children if c.kind == "p"] if sub else []
+        if len(ps) < 2:
+            continue
+        sz = _attrs(_own(xml, tc, "cellSz").group(0))
+        mg = _own(xml, tc, "cellMargin")
+        mg = _attrs(mg.group(0)) if mg else {}
+        width = int(sz["width"]) - int(mg.get("left", 510)) - int(mg.get("right", 510))
+        y = 0
+        for p in ps:
+            own = _own_lineseg(xml, p)
+            if own is not None:  # 원래 있던 캐시는 두고, 그 아래부터 이어 쌓는다
+                segs = re.findall(r'vertpos="(\d+)" vertsize="(\d+)"[^>]*?spacing="(-?\d+)"', own.group(0))
+                if segs:
+                    v, h, sp = map(int, segs[-1])
+                    y = v + h + sp
+                continue
+            if any(True for _ in _walk(p, "tbl")):
+                continue
+            body = xml[p.start:p.end]
+            run = RUN_RE.search(body)
+            size = chars.get(_attrs(run.group(1)).get("charPrIDRef", "0"), 1000) if run else 1000
+            kind, val, left = pprs.get(_attrs(xml[p.start:p.open_end]).get("paraPrIDRef"), ("PERCENT", 160, 0))
+            line = val if kind == "FIXED" else size * max(val, 100) // 100
+            segs = []
+            for pos in _wrap(_text(body, 0, len(body)), size, max(width - left, size)):
+                segs.append(f'<hp:lineseg textpos="{pos}" vertpos="{y}" vertsize="{size}" textheight="{size}" '
+                            f'baseline="{size * 85 // 100}" spacing="{line - size}" horzpos="{left}" '
+                            f'horzsize="{max(width - left, size)}" flags="393216"/>')
+                y += line
+            edits.append((p.close_start, p.close_start, "<hp:linesegarray>" + "".join(segs) + "</hp:linesegarray>"))
+    return _apply(xml, edits)
+
+
+def _wrap(text: str, size: int, width: int) -> list[int]:
+    """줄마다 시작 글자 위치. 넘치면 마지막 공백에서, 공백이 없으면 그 글자에서 끊는다."""
+    starts, cur, last_space = [0], 0.0, -1
+    for i, ch in enumerate(text):
+        w = _text_width(ch, size)
+        if cur + w > width and i > starts[-1]:
+            cut = last_space + 1 if last_space >= starts[-1] else i
+            starts.append(cut)
+            cur = _text_width(text[cut:i + 1], size)
+            last_space = -1
+            continue
+        cur += w
+        if ch == " ":
+            last_space = i
+    return starts
 
 
 def _rsvg() -> str | None:

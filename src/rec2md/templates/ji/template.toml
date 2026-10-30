@@ -54,3 +54,13 @@ tail = ["decisions", "actions", "next_meeting"]
 decisions = "결정사항"
 actions = "향후 할 일"
 next_meeting = "다음 회의"
+
+[hwpx.styles]
+# 회의내용 단계 → 회사 양식(form.hwpx)의 문단 스타일 이름. 실제 회의록의 쓰임: 상위 항목 "■", 하위 항목 "-_하위본문".
+# 두 스타일은 글머리표를 스스로 붙이므로 텍스트의 기호(▶, -)는 빠지고 번호(1.)는 남는다.
+# 3단(내용)은 하위본문을 2000(HWPUNIT)만큼 더 들여 쓴다. 회사 원본이 없으면 같은 이름의 내어쓰기 스타일을 만든다
+content = ["■", "-_하위본문", { style = "-_하위본문", indent = 2000 }]
+
+[docx.styles]
+# 회의내용 단계 → docx 문단 스타일. hwpx와 같이 하위 단계는 글머리표 목록 스타일(기호는 스타일이 붙임)
+content = ["회의내용 1단", "List Bullet", "List Bullet 2"]
