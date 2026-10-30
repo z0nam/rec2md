@@ -12,7 +12,21 @@ PIPELINE = "pyannote/speaker-diarization-community-1"
 Turn = tuple[float, float, str]  # (start, end, speaker)
 
 
+SegEmb = tuple[float, float, str, "object"]  # (start, end, speaker, 임베딩)
+SEG_MIN, SEG_MAX, SEG_PER_SPK = 1.5, 10.0, 60
+
+
 def diarize(wav: Path, num_speakers: int | None = None) -> list[Turn]:
+    return diarize_with_embeddings(wav, num_speakers)[0]
+
+
+def diarize_with_embeddings(wav: Path, num_speakers: int | None = None) -> tuple[list[Turn], dict, list[SegEmb]]:
+    """화자 구간과 함께 목소리 DB용 임베딩을 돌려준다.
+
+    - 클러스터별 대표 임베딩 {원래 라벨: 벡터} (pyannote가 군집화하며 낸 중심)
+    - 구간별 임베딩 [(start, end, 원래 라벨, 벡터)]: 화자마다 긴 구간 최대 60개. 클러스터에 다른 사람이
+      섞였을 때 등록에서 그 구간을 빼려고 쓴다.
+    """
     try:
         import torch
         from pyannote.audio import Pipeline
@@ -37,7 +51,41 @@ def diarize(wav: Path, num_speakers: int | None = None) -> list[Turn]:
     out = pipe(audio, **kw)
     # community-1은 겹침 발화를 빼고 한 시점에 한 화자만 남긴 결과를 따로 준다(전사 정렬용)
     ann = getattr(out, "exclusive_speaker_diarization", None) or getattr(out, "speaker_diarization", out)
-    return [(seg.start, seg.end, spk) for seg, _, spk in ann.itertracks(yield_label=True)]
+    turns = [(seg.start, seg.end, spk) for seg, _, spk in ann.itertracks(yield_label=True)]
+    # speaker_embeddings 행은 speaker_diarization.labels() 순서다. 클러스터가 모자라 0으로 채운 행은 뺀다
+    embs = {}
+    vecs = getattr(out, "speaker_embeddings", None)
+    if vecs is not None:
+        for label, vec in zip(out.speaker_diarization.labels(), vecs):
+            if abs(vec).sum() > 0:
+                embs[label] = vec
+    try:
+        segs = _segment_embeddings(pipe, audio["waveform"], turns)
+    except Exception as e:  # 구간 임베딩은 보조 정보라 실패해도 전사는 계속한다
+        print(f"[rec2md] 구간 임베딩 생략: {e}", flush=True)
+        segs = []
+    return turns, embs, segs
+
+
+def _segment_embeddings(pipe, waveform, turns: list[Turn]) -> list[SegEmb]:
+    import numpy as np
+
+    from .audio import SAMPLE_RATE
+
+    by_spk: dict[str, list[Turn]] = {}
+    for t in turns:
+        if t[1] - t[0] >= SEG_MIN:
+            by_spk.setdefault(t[2], []).append(t)
+    picked = [t for ts in by_spk.values() for t in sorted(ts, key=lambda t: t[0] - t[1])[:SEG_PER_SPK]]
+    out: list[SegEmb] = []
+    # 0으로 채우고 마스크를 주는 배치 호출은 중심과 엉뚱하게 어긋났다(실측). 구간마다 제 길이로 한 번씩 부른다
+    for s, e, spk in picked:
+        mid, half = (s + e) / 2, min(e - s, SEG_MAX) / 2  # 10초보다 길면 가운데만
+        piece = waveform[:, int((mid - half) * SAMPLE_RATE):int((mid + half) * SAMPLE_RATE)]
+        v = pipe._embedding(piece[None])[0]
+        if np.isfinite(v).all():
+            out.append((s, e, spk, v))
+    return out
 
 
 LOW_PROB = 0.3
@@ -79,11 +127,14 @@ def _speaker_at(w: Word, turns: list[Turn]) -> str | None:
     return best
 
 
-def assign_speakers(segs: list[Segment], turns: list[Turn]) -> list[Segment]:
-    """단어마다 화자를 붙인 뒤 화자가 바뀌는 지점에서 세그먼트를 다시 자른다."""
+def assign_speakers(segs: list[Segment], turns: list[Turn], rename: dict[str, str] | None = None) -> list[Segment]:
+    """단어마다 화자를 붙인 뒤 화자가 바뀌는 지점에서 세그먼트를 다시 자른다.
+
+    rename에 빈 dict를 넘기면 {원래 라벨: 화자N} 대응이 채워진다(임베딩 사이드카의 라벨 맞추기용).
+    """
     turns = sorted(turns)
     # 첫 등장 순서대로 화자1, 화자2 … 로 이름을 바꾼다
-    rename: dict[str, str] = {}
+    rename = {} if rename is None else rename
     words = [w for seg in segs for w in (seg.words or [Word(seg.start, seg.end, seg.text)])]
     # 말소리 구간과 전혀 안 겹치고 확신도 낮은 단어는 무음·잡음에서 지어낸 것으로 보고 버린다
     words = [w for w in words if w.prob >= LOW_PROB or _overlap(w, turns) > 0]

@@ -13,9 +13,35 @@ dependencies = [
 diarize = [
     "pyannote.audio>=4.0",
 ]
+render = [
+    "jinja2>=3.1",
+]
+export = [
+    "pypdfium2>=4.30",
+    "pillow>=10",  # pypdfium2의 to_pil()
+]
+office = [
+    "docxtpl>=0.18",
+    "python-docx>=1.1",
+]
+voices = [
+    "numpy>=1.24",
+    "scipy>=1.10",  # 헝가리안 매칭 (pyannote가 이미 끌어옴)
+]
 
 [dependency-groups]
-dev = ["rapidfuzz>=3.0"]  # scripts/compare.py
+dev = [
+    "pytest>=8.0",
+    "rapidfuzz>=3.0",  # scripts/compare.py
+    "rec2md[voices]",  # tests/test_voices.py (CI는 dev 그룹만 설치)
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
 
 [project.scripts]
 rec2md = "rec2md.cli:main"

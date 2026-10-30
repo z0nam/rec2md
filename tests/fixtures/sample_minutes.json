@@ -1,0 +1,64 @@
+{
+ "title": "합성 테스트 회의",
+ "date": "2026-10-30",
+ "time": "10:00-11:00",
+ "place": "가상 회의실",
+ "agenda": [
+  "테스트 자동화 계획 수립",
+  "일정 검토"
+ ],
+ "attendees": [
+  {
+   "name": "홍길동",
+   "org": "가나연구원",
+   "role": "연구위원"
+  },
+  {
+   "name": "김철수",
+   "org": "가나연구원",
+   "role": "선임연구원"
+  }
+ ],
+ "author": "김철수",
+ "owner": "홍길동",
+ "summary": [
+  "테스트 자동화 및 CI 파이프라인 구축 안건 확정"
+ ],
+ "sections": [
+  {
+   "heading": "테스트 프레임워크 선정",
+   "items": [
+    {
+     "text": "pytest 도입",
+     "children": [
+      {
+       "text": "단위 테스트 및 합성 픽스처 적용"
+      }
+     ],
+     "ts": 12.5
+    }
+   ]
+  }
+ ],
+ "decisions": [
+  "pytest를 공식 테스트 러너로 채택"
+ ],
+ "actions": [
+  {
+   "task": "CI 워크플로 작성",
+   "owner": "김철수",
+   "due": "2026-10-31"
+  }
+ ],
+ "next_meeting": "2026-11-06 10:00",
+ "attachments": [],
+ "source": {
+  "recording": "sample.wav",
+  "transcript": "sample.segments.json",
+  "range": [
+   0,
+   3600
+  ]
+ },
+ "version": 1
+}

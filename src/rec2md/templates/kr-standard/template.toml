@@ -1,0 +1,65 @@
+# 국내 기관 회의록 공통 골격. 스키마 설명은 docs/templates.md
+name = "kr-standard"
+title = "회의록"
+description = "국내 기관 공통 회의록 (회의명·일시·장소·참석자·안건·내용·결정사항·향후 일정)"
+date_style = "ko"
+time_sep = " 〜 "  # ASCII ~는 md에서 취소선이 될 수 있음
+attendee_style = "org"
+attendee_role = true
+
+[[fields]]
+label = "회의명"
+value = "title"
+
+[[fields]]
+label = "일시"
+value = "datetime"
+row = 1
+
+[[fields]]
+label = "장소"
+value = "place"
+row = 1
+
+[[fields]]
+label = "참석자"
+value = "attendees"
+
+[[fields]]
+label = "작성자"
+value = "author"
+
+[[fields]]
+label = "안건"
+value = "agenda"
+
+[[fields]]
+label = "회의내용"
+value = "content"
+block = true
+
+[[fields]]
+label = "결정사항"
+value = "decisions"
+
+[[fields]]
+label = "향후 일정"
+value = "actions"
+
+[[fields]]
+label = "다음 회의"
+value = "next_meeting"
+
+[content]
+heading = "{n}. "
+item = "- "
+child = "· "
+summary = "개요"
+
+[hwpx.styles]
+# 회의내용 단계(소제목·소항목·내용) → 문단 스타일 이름. 양식에 없으면 내어쓰기 스타일로 만들어 넣는다
+content = ["회의내용 1단", "회의내용 2단", "회의내용 3단"]
+
+[docx.styles]
+# 회의내용 단계 → docx 문단 스타일. 문서에 없으면 단계별 내어쓰기 스타일로 만든다(기호는 텍스트에 남음)
+content = ["회의내용 1단", "회의내용 2단", "회의내용 3단"]

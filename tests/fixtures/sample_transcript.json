@@ -1,0 +1,30 @@
+{
+ "source": "sample_dialogue.wav",
+ "duration": 180.0,
+ "engine": "local",
+ "language": "ko",
+ "segments": [
+  {
+   "start": 0.0,
+   "end": 3.5,
+   "text": "안녕하세요. 오늘 회의를 시작하겠습니다.",
+   "speaker": "화자1"
+  },
+  {
+   "start": 4.0,
+   "end": 8.0,
+   "text": "네, 첫 번째 안건을 검토하겠습니다.",
+   "speaker": "화자2"
+  },
+  {
+   "start": 8.5,
+   "end": 12.0,
+   "text": "세부 일정에 대해 말씀해 주십시오.",
+   "speaker": "화자1"
+  }
+ ],
+ "meta": {
+  "diarizer": "pyannote/speaker-diarization-community-1",
+  "title": "주간 회의"
+ }
+}
