@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 MINUTES_FORMATS = ("md", "html", "docx", "hwpx")
-TRANSCRIPT_FORMATS = ("txt", "md", "html", "docx", "hwpx")
+TRANSCRIPT_FORMATS = ("txt", "md", "html")  # transcript_export가 지원하는 것
 
 # 형식별로 필요한 extra (렌더러 모듈의 의존성이 없을 때 안내)
 EXTRA_HINT = {"md": "render", "html": "render", "docx": "office", "hwpx": "office"}
