@@ -184,3 +184,21 @@ def test_sidecar_segments_roundtrip(tmp_path):
     voices.save_sidecar(p, embs, [(0, 2, "S0"), (3, 5, "S1")], {"S0": "화자1", "S1": "화자2"}, segs)
     got = voices.load_segments(p)
     assert set(got) == {"화자1", "화자2"} and got["화자2"][0][:2] == (3.0, 5.0)
+
+
+def test_below_threshold_edges_do_not_displace_valid_match(monkeypatch):
+    # [[0.80, 0.74], [0.74, 0.00]]: 전체 합만 보면 0.74 두 개를 고르지만 0.80 짝이 살아야 한다
+    m = np.array([[0.80, 0.74], [0.74, 0.00]], dtype=np.float32)
+    monkeypatch.setattr(voices, "score_matrix", lambda p, c: (["화자1", "화자2"], ["홍길동", "김철수"], m))
+    clusters = {"화자1": (np.ones(2), 60), "화자2": (np.ones(2), 60)}
+    got = voices.match({"홍길동": np.ones((1, 2)), "김철수": np.ones((1, 2))}, clusters, threshold=0.75)
+    assert got == {"화자1": {"name": "홍길동", "score": 0.8}}
+
+
+def test_sidecar_empty_mapping_and_permissions(tmp_path):
+    p = tmp_path / "a.voices.npz"
+    p.write_bytes(b"old")
+    p.chmod(0o644)
+    voices.save_sidecar(p, {"S0": np.ones(4)}, [(0, 2, "S0")], {}, [(0.0, 2.0, "S0", np.ones(4))])
+    assert stat.S_IMODE(p.stat().st_mode) == 0o600
+    assert voices.load_sidecar(p) == {} and voices.load_segments(p) == {}

@@ -74,7 +74,7 @@ def run_one(src: Path, args) -> Path:
 
     t = Transcript(source=src.name, duration=duration, engine=f"{engine.name}:{getattr(engine, 'model', '')}",
                    language=args.language, segments=segs, meta=meta)
-    if turns is not None and embs:
+    if turns is not None and embs and rename:  # 전사된 말이 없으면 화자N도 없어 사이드카를 만들 수 없다
         _voices(t, seg_path, embs, seg_embs, turns, rename, args)
     t.to_json(seg_path)
     raw_path.write_text(render_raw(t, src.stem), encoding="utf-8")

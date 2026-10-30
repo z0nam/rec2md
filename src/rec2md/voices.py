@@ -40,14 +40,19 @@ def save_sidecar(path: Path, embs: dict, turns: list, rename: dict[str, str], se
     for s, e, spk in turns:
         secs[spk] = secs.get(spk, 0.0) + (e - s)
     raw = [r for r in rename if r in embs]  # 전사 단어가 하나도 안 붙은 클러스터는 화자N이 없으니 뺀다
-    np.savez(path, labels=np.array([rename[r] for r in raw]),
-             vecs=np.array([embs[r] for r in raw], dtype=np.float32).reshape(len(raw), -1),
-             seconds=np.array([secs.get(r, 0.0) for r in raw], dtype=np.float32),
-             seg_labels=np.array([rename[x[2]] for x in segs if x[2] in rename]),
-             seg_start=np.array([x[0] for x in segs if x[2] in rename], dtype=np.float32),
-             seg_end=np.array([x[1] for x in segs if x[2] in rename], dtype=np.float32),
-             seg_vecs=np.array([x[3] for x in segs if x[2] in rename], dtype=np.float32).reshape(-1, dim)
-             if (dim := len(next(iter(embs.values()), ()))) else np.zeros((0, 0), dtype=np.float32))
+    dim = len(next(iter(embs.values()), ()))
+    seg = [x for x in segs if x[2] in rename]
+    # 생체정보라 처음부터 본인만 읽게 만들고, 기존 파일을 덮어쓸 때도 권한을 다시 좁힌다
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        np.savez(f, labels=np.array([rename[r] for r in raw], dtype=str),
+                 vecs=np.array([embs[r] for r in raw], dtype=np.float32).reshape(len(raw), dim),
+                 seconds=np.array([secs.get(r, 0.0) for r in raw], dtype=np.float32),
+                 seg_labels=np.array([rename[x[2]] for x in seg], dtype=str),
+                 seg_start=np.array([x[0] for x in seg], dtype=np.float32),
+                 seg_end=np.array([x[1] for x in seg], dtype=np.float32),
+                 seg_vecs=np.array([x[3] for x in seg], dtype=np.float32).reshape(len(seg), dim))
 
 
 def load_segments(path: Path) -> dict[str, list[tuple[float, float, np.ndarray]]]:
@@ -218,7 +223,8 @@ def match(people: dict[str, np.ndarray], clusters: dict[str, tuple[np.ndarray, f
     from scipy.optimize import linear_sum_assignment
 
     labels, names, m = score_matrix(people, clusters)
-    rows, cols = linear_sum_assignment(-m)
+    # 임계값 미만 짝은 0점으로 둬서, 쓰이지도 않을 짝이 유효한 짝을 밀어내지 못하게 한다
+    rows, cols = linear_sum_assignment(-np.where(m >= threshold, m, 0.0))
     groups: dict[str, list[int]] = {}  # 이름 → 그 이름에 붙을 클러스터 행들
     for i, j in zip(rows, cols):
         if m[i, j] >= threshold:
