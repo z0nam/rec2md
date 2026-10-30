@@ -1,0 +1,9 @@
+skeleton.hwpx는 python-hwpx(https://github.com/airmang/python-hwpx)의
+hwpx/data/Skeleton.hwpx에서 문서 메타데이터(작성자·날짜)만 지운 것이다.
+
+python-hwpx
+Copyright 2025-2026 airmang
+Licensed under the Apache License, Version 2.0 (skeleton-hwpx.LICENSE).
+
+"HWPX" is the document format specified and trademarked by Hancom Inc. (한글과컴퓨터).
+rec2md is not affiliated with Hancom Inc.
