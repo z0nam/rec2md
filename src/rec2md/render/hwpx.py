@@ -611,8 +611,10 @@ def _form_section(xml: str, template) -> str:
 
 # ── pdf·png (rhwp) ───────────────────────────────────────────────────
 # rhwp(https://github.com/edwardkim/rhwp)로 쪽마다 svg를 만든 뒤 rsvg-convert(librsvg)로 pdf·png.
-# rhwp는 세로 정렬이 TOP인 칸에 줄 배치 캐시 없는 문단이 여럿이면 한 줄에 겹쳐 그린다(v0.7.17).
-# 내보내기용 사본에서만 그런 칸을 CENTER로 바꿔 피한다 — 채운 칸은 높이를 맞춰 두었으므로 거의 같다.
+# rhwp(v0.7.17)는 줄 배치 캐시(linesegarray)가 없는 문단이 여럿인 칸을 제대로 못 그린다: TOP 정렬이면 한 줄에
+# 겹쳐 그리고, 칸이 쪽을 넘으면 문단마다 한 쪽씩 쓴다. 내보내기용 사본에서만 그런 칸의 문단마다 줄 배치를
+# 어림해 넣는다(`_layout_cache`). 결과 hwpx에는 넣지 않는다 — 한글은 캐시가 없으면 스스로 계산한다.
+# 한 문단짜리 칸은 rhwp가 스스로 줄을 바꾸므로 건드리지 않는다(어림한 줄바꿈이 오히려 어긋난다).
 
 RHWP_CANDIDATES = ["rhwp", str(Path.home() / ".local" / "bin" / "rhwp")]
 
@@ -636,9 +638,10 @@ def to_svg(src: Path, out_dir: Path) -> list[Path]:
     with tempfile.TemporaryDirectory(prefix="rec2md-rhwp-") as td:
         fixed = Path(td) / src.name
         entries = _read_zip(src)
+        metrics = _metrics(entries.get("Contents/header.xml", b""))
         for name, data in entries.items():
             if SECTION_RE.fullmatch(name):
-                entries[name] = _rhwp_workaround(data.decode("utf-8")).encode("utf-8")
+                entries[name] = _layout_cache(data.decode("utf-8"), metrics).encode("utf-8")
         _write_zip(src, fixed, entries, preview="")
         r = subprocess.run([rhwp, "export-svg", str(fixed), "-o", td, "--embed-fonts"],
                            capture_output=True, text=True, timeout=300)
@@ -653,12 +656,65 @@ def to_svg(src: Path, out_dir: Path) -> list[Path]:
         return outs
 
 
-def _rhwp_workaround(xml: str) -> str:
-    def fix(mt: re.Match) -> str:
-        sub = xml[mt.start():xml.index("</hp:subList>", mt.end())]
-        return mt.group(0).replace('vertAlign="TOP"', 'vertAlign="CENTER"') if sub.count("<hp:p ") > 1 else mt.group(0)
+def _layout_cache(xml: str, metrics) -> str:
+    """문단이 여럿인 칸에서 줄 배치 캐시가 없는 문단에 어림한 캐시를 넣는다(rhwp 미리보기용).
 
-    return re.sub(r'<hp:subList\b[^>]*vertAlign="TOP"[^>]*>', fix, xml)
+    줄바꿈 위치는 `_text_width`의 글자 폭 어림으로 정한다. 실제 글꼴 폭과 달라 줄 끝이 한두 글자
+    어긋날 수 있지만, 문단이 겹치거나 쪽마다 한 문단씩 흩어지지는 않는다.
+    """
+    chars, pprs = metrics
+    root = _tree(xml)
+    edits = []
+    for tc in _walk(root, "tc"):
+        sub = next((c for c in tc.children if c.kind == "subList"), None)
+        ps = [c for c in sub.children if c.kind == "p"] if sub else []
+        if len(ps) < 2:
+            continue
+        sz = _attrs(_own(xml, tc, "cellSz").group(0))
+        mg = _own(xml, tc, "cellMargin")
+        mg = _attrs(mg.group(0)) if mg else {}
+        width = int(sz["width"]) - int(mg.get("left", 510)) - int(mg.get("right", 510))
+        y = 0
+        for p in ps:
+            own = _own_lineseg(xml, p)
+            if own is not None:  # 원래 있던 캐시는 두고, 그 아래부터 이어 쌓는다
+                segs = re.findall(r'vertpos="(\d+)" vertsize="(\d+)"[^>]*?spacing="(-?\d+)"', own.group(0))
+                if segs:
+                    v, h, sp = map(int, segs[-1])
+                    y = v + h + sp
+                continue
+            if any(True for _ in _walk(p, "tbl")):
+                continue
+            body = xml[p.start:p.end]
+            run = RUN_RE.search(body)
+            size = chars.get(_attrs(run.group(1)).get("charPrIDRef", "0"), 1000) if run else 1000
+            kind, val, left = pprs.get(_attrs(xml[p.start:p.open_end]).get("paraPrIDRef"), ("PERCENT", 160, 0))
+            line = val if kind == "FIXED" else size * max(val, 100) // 100
+            segs = []
+            for pos in _wrap(_text(body, 0, len(body)), size, max(width - left, size)):
+                segs.append(f'<hp:lineseg textpos="{pos}" vertpos="{y}" vertsize="{size}" textheight="{size}" '
+                            f'baseline="{size * 85 // 100}" spacing="{line - size}" horzpos="{left}" '
+                            f'horzsize="{max(width - left, size)}" flags="393216"/>')
+                y += line
+            edits.append((p.close_start, p.close_start, "<hp:linesegarray>" + "".join(segs) + "</hp:linesegarray>"))
+    return _apply(xml, edits)
+
+
+def _wrap(text: str, size: int, width: int) -> list[int]:
+    """줄마다 시작 글자 위치. 넘치면 마지막 공백에서, 공백이 없으면 그 글자에서 끊는다."""
+    starts, cur, last_space = [0], 0.0, -1
+    for i, ch in enumerate(text):
+        w = _text_width(ch, size)
+        if cur + w > width and i > starts[-1]:
+            cut = last_space + 1 if last_space >= starts[-1] else i
+            starts.append(cut)
+            cur = _text_width(text[cut:i + 1], size)
+            last_space = -1
+            continue
+        cur += w
+        if ch == " ":
+            last_space = i
+    return starts
 
 
 def _rsvg() -> str | None:

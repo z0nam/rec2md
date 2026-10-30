@@ -146,11 +146,28 @@ def test_hwpx_preview_is_scrubbed(minutes, tmp_path):
         assert minutes.place in z.read("Preview/PrvText.txt").decode("utf-8")
 
 
-def test_rhwp_workaround_only_multi_paragraph_top_cells():
-    xml = ('<hp:subList vertAlign="TOP"><hp:p a="1"></hp:p><hp:p a="2"></hp:p></hp:subList>'
-           '<hp:subList vertAlign="TOP"><hp:p a="1"></hp:p></hp:subList>')
-    out = hwpx._rhwp_workaround(xml)
-    assert out.count('vertAlign="CENTER"') == 1 and out.count('vertAlign="TOP"') == 1
+def test_wrap_breaks_at_spaces():
+    # 글자 크기 1000, 폭 4000: 한글 4자가 한 줄
+    assert hwpx._wrap("가나 다라마바", 1000, 4000) == [0, 3]
+    assert hwpx._wrap("가나다라마바사", 1000, 4000) == [0, 4]  # 공백이 없으면 글자에서
+    assert hwpx._wrap("", 1000, 4000) == [0]
+
+
+def test_layout_cache_only_in_preview_and_multi_paragraph_cells(minutes, tmp_path):
+    """미리보기 사본에서만, 문단이 여럿인 칸의 캐시 없는 문단에 어림한 linesegarray를 넣는다."""
+    t = load_template("kr-standard")
+    out = render_hwpx(minutes, t, tmp_path / "out.hwpx")
+    entries = hwpx._read_zip(out)
+    xml = entries["Contents/section0.xml"].decode("utf-8")
+    assert "<hp:linesegarray>" not in xml  # 결과 hwpx에는 넣지 않는다
+    metrics = hwpx._metrics(entries["Contents/header.xml"])
+    cached = hwpx._layout_cache(xml, metrics)
+    root = hwpx._tree(cached)
+    for tc in hwpx._walk(root, "tc"):
+        ps = hwpx._paras(tc)
+        assert all((hwpx._own_lineseg(cached, p) is not None) == (len(ps) > 1) for p in ps)
+    assert hwpx._layout_cache(cached, metrics) == cached  # 두 번 넣지 않음
+    ET.fromstring(cached)
 
 
 @pytest.mark.skipif(not (hwpx.find_rhwp() and shutil.which("rsvg-convert")), reason="rhwp, rsvg-convert 없음")
