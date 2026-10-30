@@ -71,6 +71,10 @@ def run_one(src: Path, args) -> Path:
 
     t = Transcript(source=src.name, duration=duration, engine=f"{engine.name}:{getattr(engine, 'model', '')}",
                    language=args.language, segments=segs, meta=meta)
+    from .bounds import estimate, summary
+    meta["meeting_bounds"] = estimate(t)
+    if meta["meeting_bounds"]["confidence"] != "none":
+        log(f"회의 구간 추정 {summary(meta['meeting_bounds'], duration)}")
     t.to_json(seg_path)
     raw_path.write_text(render_raw(t, src.stem), encoding="utf-8")
     if ctx:
@@ -82,7 +86,7 @@ def run_one(src: Path, args) -> Path:
 
 
 # `rec2md <서브커맨드> ...`는 rec2md.cmd_<이름>.main(argv)로 넘긴다. 그 외 인자는 전사 대상 파일
-SUBCOMMANDS = {"voices", "render", "series", "notes"}
+SUBCOMMANDS = {"voices", "render", "series", "bounds", "notes"}
 
 
 def main(argv: list[str] | None = None) -> None:

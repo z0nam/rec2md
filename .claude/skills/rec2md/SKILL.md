@@ -28,7 +28,8 @@ rec2md <파일...> [--speakers N] [--no-diarize] [--out <폴더>] [--language ko
      - 고치면 그 후보의 `fix`에 고친 표기를, 근거를 `reasons`에 한 줄 더 적는다. 확신이 없으면 `fix`를 `"<표기>[?]"`로 두고 녹취록에도 `[?]`를 붙인다. 고치지 않을 후보는 `fix`를 `""`로 둔다.
      - 확정된 교정 중 다음 회차에도 나올 말은 사용자 확인 후 `rec2md series add <시리즈> --fix "오인식 => 정답"`으로 용어집에 쌓는다.
      - 시리즈 맥락: `rec2md series init <이름> [--from-clova <txt>]`, `series add`, `series show --prompt`, 이미 전사한 결과에서 후보만 다시 뽑기 `series candidates <이름> <segments.json>`.
-3. **요약**(맨 위): 개요 / 주요 논의 / 결정사항 / 할 일(담당·기한이 나오면 함께).
+3. **회의 구간**: `segments.json`의 `meta.meeting_bounds`(`start`·`end`·`confidence`·`evidence`)를 본다. 녹음기를 늦게 켜거나 안 꺼서 붙은 잡담·통화 후보다. `confidence`가 `none`이 아니면 근거 구간의 raw.md를 읽어 확인하고, 맞으면 요약은 그 구간만으로 쓰고 녹취록에는 범위 밖임을 표시한다(지우지 않는다). 애매하면 사용자에게 시각과 근거를 보여 주고 묻는다. 다시 보려면 `rec2md bounds <segments.json>`.
+4. **요약**(맨 위): 개요 / 주요 논의 / 결정사항 / 할 일(담당·기한이 나오면 함께). 회의 구간을 정했으면 그 안의 내용만 쓴다.
 
 파일명이 `REC00012` 처럼 무의미하면 내용으로 `YYYYMMDD_주제` 제목을 제안만 하고, 실제 이름 변경은 사용자 확인 후.
 
@@ -52,6 +53,7 @@ rec2md <파일...> [--speakers N] [--no-diarize] [--out <폴더>] [--language ko
    - `sections`는 논의 주제별로 묶는다. 3단(소제목 → 소항목 → 내용)까지만. 문장은 회의록 관례대로 짧은 음슴체("~함", "~하기로 함")로 쓴다.
    - `ts`에는 근거 발언의 시각(초)을 raw.md에서 옮겨 둔다. 사람이 검증할 때 쓴다(기본 출력에는 안 보임).
    - `decisions`는 **명시적으로 합의된 것만**. 논의만 된 것은 `sections`에 둔다. `actions`의 담당·기한도 녹취에 나온 것만.
+   - `source.range`는 2단계에서 확정한 회의 구간을 쓴다. 따로 정하지 않았으면 `meta.meeting_bounds`의 `[start, end]`가 기본값이다(`confidence`가 `none`이면 `[0, 길이]`).
    - `summary`는 3〜5줄. `agenda`가 녹취에 없으면 회의명이나 주제로 채우고 사용자에게 알린다.
 3. **렌더**:
    ```sh

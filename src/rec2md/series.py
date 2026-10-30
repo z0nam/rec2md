@@ -83,6 +83,30 @@ def parse_attendees_full(text: str) -> dict[str, str]:
     return out
 
 
+_UNNAMED = re.compile(r"^(Attendees|참석자|화자|Speaker)\s*\d+$", re.I)
+_NAME = re.compile(r"^[가-힣]{2,4}$")
+
+
+def attendees_from_clova(path: Path) -> dict[str, str]:
+    """클로바 txt의 화자 라벨 → {이름: 소속}. 등장 순서대로.
+
+    화자 라벨은 사용자가 붙인 것이라 믿을 수 있지만 "홍길동 ○○도청 ○○팀장"처럼 소속이 붙기도 한다.
+    3번째 줄(참석자 목록)은 이런 라벨을 공백으로 이어 붙인 것이라 이름 경계를 알 수 없으므로 쓰지 않는다.
+    이름을 붙이지 않은 라벨("Attendees 3")과 이름이 아닌 라벨("○○ 주무관님 (성함확인필요)")은 건너뛴다.
+    """
+    from .clova_txt import parse
+
+    out: dict[str, str] = {}
+    for seg in parse(path).segments:
+        label = (seg.speaker or "").strip()
+        if not label or _UNNAMED.match(label) or "확인" in label:
+            continue
+        name, _, org = label.partition(" ")
+        if _NAME.match(name):
+            out.setdefault(name, org.strip())
+    return out
+
+
 def parse_attendees(text: str) -> list[str]:
     return list(parse_attendees_full(text))
 
