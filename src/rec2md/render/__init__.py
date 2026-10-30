@@ -29,7 +29,7 @@ def render_raw(t: Transcript, title: str) -> str:
     speakers = sorted({s.speaker for s in t.segments if s.speaker})
     names = t.meta.get("speaker_names") or {}
     if speakers:
-        note = "이름은 목소리 DB 자동 매칭(?는 불확실)" if names else "라벨은 자동 부여, 실명 아님"
+        note = "이름은 목소리 DB 매칭·사용자 지정(?는 불확실)" if names else "라벨은 자동 부여, 실명 아님"
         lines.append(f"- 화자: {len(speakers)}명 ({', '.join(speaker_label(x, names) for x in speakers)}) — {note}")
     lines += ["", "---", ""]
 

@@ -19,7 +19,7 @@ from .render import fmt_ts
 from .segments import Transcript
 
 DB_PATH = Path(os.environ.get("REC2MD_VOICES_DB", Path.home() / ".config" / "rec2md" / "voices" / "voices.db"))
-THRESHOLD = 0.7  # eval_voices 실측(2026-10-30): 같은 사람 최저 0.85, 다른 사람 최고 0.61
+THRESHOLD = 0.75  # eval_voices 실측(2026-10-30, 녹취 5건): 같은 사람 최저 0.85, 다른 사람 최고 0.66
 MARGIN = 0.05  # 임계값 + 이 값 미만은 "이름?"으로 표시
 MIN_ENROLL_SEC = 30.0  # 이보다 짧은 클러스터는 임베딩이 불안정해 등록을 거절한다
 OUTLIER_COS = 0.5  # 구간 임베딩이 클러스터 중심과 이보다 멀면 다른 사람이 섞인 것으로 보고 등록에서 뺀다

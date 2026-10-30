@@ -7,6 +7,7 @@
         --cases-at 0.6                이 임계값의 오태깅 사례를 시각과 함께 <cache>/mistag-cases.md로
         --queue DIR                   사람 판정용 <stem>.cases.json (rec2md review --queue) 생성
         --answers DIR                 판정 결과 <stem>.answers.json을 gold v1(출처 user)로 반영
+        --bounds 오디오stem=0-49:40   이 구간만 평가 (회의 뒤 통화·잡담 제외, 여러 번)
 
 정답과 출처
 - 클로바 txt의 화자명을 scripts/compare.py의 그리디 매핑으로 우리 클러스터에 대응시킨다. 클로바 이름은 "문서 전체"
@@ -48,7 +49,8 @@ from rec2md.render import fmt_ts  # noqa: E402
 from rec2md.segments import Segment, Transcript  # noqa: E402
 
 AUDIO = {".mp3", ".m4a", ".wav", ".mp4", ".mov"}
-NOT_A_NAME = re.compile(r"^(Attendees|참석자|화자|Speaker)\s*\d+$|^\d", re.I)
+# 클로바 기본 라벨, 미지정, "(성함확인필요)"처럼 이름을 모르는 라벨은 정답이 아니다
+NOT_A_NAME = re.compile(r"^(Attendees|참석자|화자|Speaker)\s*\d+$|^\d|미지정|확인\s*필요", re.I)
 SOURCES = ("clova-manual", "user", "inferred")
 PURITY = 0.7
 CASES_PER_REC = (20, 30)
@@ -242,8 +244,13 @@ def write_queue(out: Path, recs: list[Rec], use: set[str], min_sec: float, mode:
     """녹취마다 판정 사례 20〜30개: 엇갈림(우리 vs 클로바) → 불순 화자 → 중심에서 먼 구간 → 일치 표본(약 20%)."""
     out.mkdir(parents=True, exist_ok=True, mode=0o700)
     rng = random.Random(seed)
-    next_id = 1
+    # 이미 만든 사례 파일은 건드리지 않는다(답을 받는 중일 수 있음). 새 녹취만 이어지는 번호로 추가
+    done = {f.name.removesuffix(".cases.json"): f for f in out.glob("*.cases.json")}
+    ids = [int(c["id"][2:]) for f in done.values() for c in json.loads(f.read_text(encoding="utf-8"))["cases"]]
+    next_id = max(ids, default=0) + 1
     for r in recs:
+        if r.audio.stem in done:
+            continue
         people = build_people(recs, r.rid, use, min_sec, mode)
         got = voices.match(people, clusters_of(r, use), threshold=th)
         disagree, impure, outlier, agree = [], [], [], []
@@ -307,8 +314,26 @@ def write_queue(out: Path, recs: list[Rec], use: set[str], min_sec: float, mode:
               f"먼 구간 {kinds['outlier']}, 일치 {kinds['agree']}) → {path}", file=sys.stderr)
 
 
+def _clip_bounds(turns: list, lo: float, hi: float) -> list:
+    return [(max(s, lo), min(e, hi), k) for s, e, k in turns if e > lo and s < hi]
+
+
+def _clip_seg_bounds(segs: list[Segment], lo: float, hi: float) -> list[Segment]:
+    return [Segment(max(x.start, lo), min(x.end, hi), x.text, x.speaker) for x in segs if x.end > lo and x.start < hi]
+
+
+def _parse_bounds(items: list[str]) -> dict[str, tuple[float, float]]:
+    out = {}
+    for item in items:
+        stem, _, rng = item.rpartition("=")
+        lo, _, hi = rng.partition("-")
+        out[stem] = (clova_txt._sec(lo) if lo else 0.0, clova_txt._sec(hi) if hi else float("inf"))
+    return out
+
+
 def load_recs(args) -> list[Rec]:
     gold = json.loads(args.gold.read_text(encoding="utf-8")) if args.gold else {}
+    bounds = _parse_bounds(getattr(args, "bounds", []) or [])
     pairs: list[tuple[Path, Path]] = []
     for txt in sorted(args.clova_dir.glob("*.txt")):
         audio = next((a for a in args.audio_dir.iterdir() if a.stem == txt.stem and a.suffix.lower() in AUDIO), None)
@@ -329,7 +354,7 @@ def load_recs(args) -> list[Rec]:
                 label_gold[lb] = (entry.get("name", lb), entry["source"])
             elif isinstance(entry, str):
                 label_gold[lb] = (lb, entry)
-            elif not NOT_A_NAME.match(lb):
+            elif not NOT_A_NAME.search(lb):
                 label_gold[lb] = (lb, g.get("default", args.default_source))
         if not label_gold:
             continue
@@ -342,6 +367,15 @@ def load_recs(args) -> list[Rec]:
         by_lb: dict[str, list] = {}
         for s, e, lb, v in segs:
             by_lb.setdefault(lb, []).append((s, e, v))
+        if audio.stem in bounds:
+            lo, hi = bounds[audio.stem]
+            turns, clova.segments = _clip_bounds(turns, lo, hi), _clip_seg_bounds(clova.segments, lo, hi)
+            by_lb = {lb: [x for x in xs if lo <= x[0] and x[1] <= hi] for lb, xs in by_lb.items()}
+            secs = {}
+            for s, e, spk in turns:
+                secs[spk] = secs.get(spk, 0.0) + e - s
+            embs = {k: v for k, v in embs.items() if k in secs}  # 구간 밖에서만 말한 클러스터는 뺀다
+            print(f"[{rid}] 평가 구간 {fmt_ts(lo)}〜{fmt_ts(hi)}", file=sys.stderr)
         rec = Rec(rid, audio, clova, turns, embs, by_lb, secs, label_gold)
         map_clova(rec)
         if args.answers:
@@ -370,6 +404,7 @@ def main() -> None:
     p.add_argument("--cases-at", type=float, help="이 임계값의 오태깅 사례를 시각과 함께 파일로")
     p.add_argument("--queue", type=Path, help="판정 사례 <stem>.cases.json을 쓸 폴더 (local/ 아래)")
     p.add_argument("--answers", type=Path, help="판정 결과 <stem>.answers.json이 있는 폴더 → gold v1")
+    p.add_argument("--bounds", action="append", default=[], help="오디오stem=시작-끝 (예: 0-49:40), 이 구간만 평가")
     p.add_argument("--verbose", action="store_true", help="클러스터별 이름·점수 (개인정보: 로컬에서만)")
     args = p.parse_args()
     load_dotenv(ENV_FILE)
