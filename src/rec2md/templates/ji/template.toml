@@ -1,0 +1,54 @@
+# 제주연구원 회의록 표. 회사 hwpx·docx 원본은 레포에 두지 않는다:
+# ~/.config/rec2md/templates/ji/form.hwpx 에 두면 이 매핑으로 채운다. 스키마 설명은 docs/templates.md
+name = "ji"
+title = "회의록"
+description = "제주연구원 회의록 (회의일시·연구자·작성자 / 참석자 / 회의장소 / 회의안건 / 회의내용)"
+date_style = "ko"
+time_sep = " – "
+attendee_style = "org"
+attendee_role = false
+
+[[fields]]
+label = "회의일시"
+value = "datetime"
+row = 1
+
+[[fields]]
+label = "연구자"
+value = "owner"
+row = 1
+
+[[fields]]
+label = "작성자"
+value = "author"
+row = 1
+
+[[fields]]
+label = "참석자"
+anchor = "참 석 자"
+value = "attendees"
+
+[[fields]]
+label = "회의장소"
+value = "place"
+
+[[fields]]
+label = "회의안건"
+value = "agenda"
+
+[[fields]]
+label = "회의내용"
+value = "content"
+block = true
+
+[content]
+heading = "{n}. "
+item = "▶ "
+child = "- "
+summary = "회의 개요"
+tail = ["decisions", "actions", "next_meeting"]
+
+[content.tail_headings]
+decisions = "결정사항"
+actions = "향후 할 일"
+next_meeting = "다음 회의"
