@@ -103,6 +103,13 @@ def apply_edits(t: Transcript, edits: list[dict]) -> Transcript:
 
 # ---- 파일 ----
 
+def same(a: Transcript, b: Transcript) -> bool:
+    """검토가 다루는 내용(구간·문장·화자·이름)이 같은가."""
+    key = lambda t: ([(s.start, s.end, s.text, s.speaker) for s in t.segments],  # noqa: E731
+                     t.meta.get("speaker_names") or {})
+    return key(a) == key(b)
+
+
 class Session:
     """segments.json 하나에 대한 검토 상태. 원본·편집 로그·결과 파일 경로를 쥔다."""
 
@@ -115,12 +122,31 @@ class Session:
         self.raw = seg_path.with_name(f"{stem}.raw.md")
         self.edits: list[dict] = (json.loads(self.edits_path.read_text(encoding="utf-8"))
                                   if self.edits_path.is_file() else [])
-        self.current = self.base()
-        if self.edits:
-            self.current = apply_edits(self.current, self.edits)
+        self.notice = ""
+        if self.orig.is_file() and not same(apply_edits(self.base(), self.edits), Transcript.from_json(self.seg)):
+            self._rebase()
+        self.current = apply_edits(self.base(), self.edits)
+        self._disk = self.seg.read_bytes()
+
+    def _rebase(self) -> None:
+        """지난 검토 뒤 segments.json이 다른 곳(rec2md voices name·match 등)에서 바뀌었다. 그 내용을 버리지 않도록
+        지금 파일을 새 원본으로 삼고, 예전 원본과 편집 로그는 시각을 붙여 보관한다."""
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        shutil.move(self.orig, self.seg.with_name(f"{self.stem}.{ts}.segments.orig.json"))
+        if self.edits_path.is_file():
+            shutil.move(self.edits_path, self.seg.with_name(f"{self.stem}.{ts}.edits.json"))
+        shutil.copy2(self.seg, self.orig)
+        self.edits = []
+        self.notice = (f"지난 검토 뒤 segments.json이 바뀌어 지금 파일을 새 원본으로 삼음 "
+                       f"(예전 원본·편집 로그는 {self.stem}.{ts}.*.json으로 보관)")
 
     def base(self) -> Transcript:
         return Transcript.from_json(self.orig if self.orig.is_file() else self.seg)
+
+    def _check_disk(self) -> None:
+        """화면을 연 뒤 다른 명령이 segments.json을 고쳤으면 덮어쓰지 않는다."""
+        if self.seg.read_bytes() != self._disk:
+            raise ValueError("segments.json이 다른 곳에서 바뀜 — 덮어쓰지 않음. 화면을 닫고 rec2md review로 다시 열 것")
 
     def _write(self) -> None:
         if not self.orig.is_file():  # 처음 저장할 때 한 번만 원본을 남긴다
@@ -129,14 +155,17 @@ class Session:
         self.current.to_json(self.seg)
         self.raw.write_text(render_raw(self.current, self.stem), encoding="utf-8")
         self.edits_path.write_text(json.dumps(self.edits, ensure_ascii=False, indent=1), encoding="utf-8")
+        self._disk = self.seg.read_bytes()
 
     def add(self, edit: dict) -> None:
+        self._check_disk()
         edit = {**edit, "at": edit.get("at") or now()}
         apply_edits(self.current, [edit])  # 잘못된 연산이면 로그에 넣기 전에 ValueError
         self.edits.append(edit)
         self._write()
 
     def undo(self) -> dict | None:
+        self._check_disk()
         if not self.edits:
             return None
         e = self.edits.pop()
@@ -157,6 +186,7 @@ class Session:
                           "user": is_user(names.get(lb))}
                          for lb in labels],
             "edits": len(self.edits),
+            "notice": self.notice,
         }
 
 

@@ -153,7 +153,7 @@ let S = null;            // 서버 상태
 let curIdx = -1;         // 재생 중인 세그먼트
 let autoScroll = true;
 let browse = null;       // {label, pos}
-let stopAt = null;       // 판정 모드: 이 시각에 멈춤
+let stopAt = null;       // 훑어보기·판정: 이 시각에 멈춤
 let caseIdx = 0;
 let pop = null;
 
@@ -209,6 +209,7 @@ function togglePlay() {
 }
 function seek(t, play = true) {
   if (!S || !S.audio) return;
+  stopAt = null;   // 훑어보기·판정의 "여기서 멈춤"은 그쪽이 seek 뒤에 다시 건다
   audio.currentTime = Math.max(0, t);
   if (play) audio.play();
 }
@@ -290,10 +291,10 @@ function renderTranscript() {
       el("div", { class: "text", onclick: () => playSeg(s.i) }, s.text)));
   }
   main.append(frag);
+  if (browse) showBrowse(); else clearBrowse();
   $("sub").textContent = [S.date, S.duration ? fmtLen(S.duration) : "", `${S.speakers.length}명`].filter(Boolean).join(" · ");
   $("undo").hidden = false;
   $("undo").disabled = !S.edits;
-  if (browse) showBrowse();
 }
 function playSeg(i) {
   autoScroll = true;
@@ -361,9 +362,10 @@ function openPop(s, anchor) {
       closePop();
       setStatus("저장됨");
       // 바꾼 화자의 구간을 바로 훑어볼 수 있게 한다 (섞인 사람 찾기)
-      const lab = S.segments[s.i].speaker;
-      browse = sc === "one" ? null : { label: lab, pos: 0 };
-      if (browse) browse.pos = Math.max(0, browseList().indexOf(s.i));
+      if (sc !== "one") {
+        browse = { label: S.segments[s.i].speaker, pos: 0 };
+        browse.pos = Math.max(0, browseList().indexOf(s.i));
+      }
       renderTranscript();
     } catch (e) { setStatus("저장 실패: " + e.message, true); }
   }
@@ -373,10 +375,15 @@ document.addEventListener("mousedown", (ev) => {
 });
 
 // ---------- 이 화자 구간 훑어보기 ----------
-function browseList() { return S.segments.filter((x) => x.speaker === browse.label).map((x) => x.i); }
+function browseList() { return browse ? S.segments.filter((x) => x.speaker === browse.label).map((x) => x.i) : []; }
+function clearBrowse() {
+  browse = null;
+  $("browsebar").classList.remove("on");
+  document.querySelectorAll(".seg.browse").forEach((x) => x.classList.remove("browse"));
+}
 function showBrowse() {
   const idx = browseList();
-  if (!idx.length) { browse = null; $("browsebar").classList.remove("on"); return; }
+  if (!idx.length) { clearBrowse(); return; }
   browse.pos = Math.min(browse.pos, idx.length - 1);
   const sp = S.speakers.find((x) => x.label === browse.label);
   $("browselabel").textContent = `${sp ? sp.name : browse.label} 구간 훑어보기`;
@@ -388,6 +395,7 @@ function showBrowse() {
 }
 function browseGo(d) {
   const idx = browseList();
+  if (!idx.length) { clearBrowse(); return; }
   browse.pos = (browse.pos + d + idx.length) % idx.length;
   showBrowse();
   const i = idx[browse.pos];
@@ -397,8 +405,7 @@ function browseGo(d) {
 }
 $("bprev").onclick = () => browseGo(-1);
 $("bnext").onclick = () => browseGo(1);
-$("bclose").onclick = () => { browse = null; $("browsebar").classList.remove("on");
-  document.querySelectorAll(".seg.browse").forEach((x) => x.classList.remove("browse")); };
+$("bclose").onclick = clearBrowse;
 
 $("undo").onclick = async () => {
   try { S = await api("/api/undo", {}); setStatus("되돌림"); renderTranscript(); }
@@ -455,14 +462,19 @@ function renderCase(autoplay = true) {
     el("div", { class: "help" }, "숫자 키로 답, 0 모르겠음, R 다시 듣기, ↑/↓ 이전·다음 사례, Space 재생/정지. 답은 바로 저장됨")));
   if (autoplay) playCase();
 }
-function go(d) { caseIdx += d; renderCase(); }
+function go(d) { if (answering) return; caseIdx += d; renderCase(); }
+let answering = false;
 async function answer(a) {
-  const c = cases()[caseIdx];
+  if (answering) return;            // 두 번 누르거나 키를 연달아 쳐도 한 번만 보낸다
+  const at = caseIdx, c = cases()[at];
+  answering = true;
   try {
     S = await api("/api/answer", { id: c.id, key: a.key ?? null, text: a.text ?? null, unsure: !!a.unsure });
     setStatus("저장됨");
-    if (caseIdx < cases().length - 1) { caseIdx++; renderCase(); } else renderCase(false);
+    if (caseIdx !== at) return;     // 기다리는 사이 사용자가 다른 사례로 옮겼으면 그 자리를 지킨다
+    if (at < cases().length - 1) { caseIdx = at + 1; renderCase(); } else renderCase(false);
   } catch (e) { setStatus("저장 실패: " + e.message, true); }
+  finally { answering = false; }
 }
 
 // ---------- 단축키 ----------
@@ -504,6 +516,7 @@ document.addEventListener("keydown", (ev) => {
   document.title = S.title + " · rec2md";
   $("title").textContent = S.title;
   if (S.audio) audio.src = "/audio"; else $("noaudio").hidden = false;
+  if (S.notice) setStatus(S.notice, true);
   $("dur").textContent = fmt(S.duration || 0);
   if (S.mode === "transcript") {
     renderTranscript();

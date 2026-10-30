@@ -240,3 +240,41 @@ def test_api_edit_undo(server, seg_file):
 def test_cli_requires_one_input(tmp_path):
     with pytest.raises(SystemExit, match="하나만"):
         cmd_review.main([])
+
+
+def test_external_change_becomes_new_base(seg_file):
+    """검토 뒤 voices name 등이 segments.json을 바꿨으면, 다시 열 때 그 내용을 버리지 않는다."""
+    s = Session(seg_file)
+    s.add(edit("one", 1, "화자2", "화자1"))
+    t = Transcript.from_json(seg_file)                       # 다른 명령이 이름을 붙임
+    t.meta["speaker_names"] = speakers.set_user_names(t.meta.get("speaker_names") or {}, {"화자3": "김철수"})
+    t.to_json(seg_file)
+
+    s2 = Session(seg_file)
+    assert "새 원본" in s2.notice and s2.edits == []
+    assert s2.current.meta["speaker_names"]["화자3"]["name"] == "김철수"
+    d = seg_file.parent
+    assert len(list(d.glob("meet.*.edits.json"))) == 1 and len(list(d.glob("meet.*.segments.orig.json"))) == 1
+    s2.add(edit("one", 0, "화자1", "화자2"))
+    out = Transcript.from_json(seg_file)
+    assert out.meta["speaker_names"]["화자3"]["name"] == "김철수"     # 바깥 변경이 살아 있음
+    assert labels(out)[:2] == ["화자2", "화자1"]                      # 지난 검토 결과 + 새 편집
+
+
+def test_refuses_to_overwrite_change_made_while_open(seg_file):
+    s = Session(seg_file)
+    s.add(edit("one", 1, "화자2", "화자1"))
+    t = Transcript.from_json(seg_file)
+    t.segments[0].text = "다른 명령이 고침"
+    t.to_json(seg_file)
+    with pytest.raises(ValueError, match="다른 곳에서 바뀜"):
+        s.add(edit("one", 0, "화자1", "화자2"))
+    with pytest.raises(ValueError, match="다른 곳에서 바뀜"):
+        s.undo()
+    assert Transcript.from_json(seg_file).segments[0].text == "다른 명령이 고침" and len(s.edits) == 1
+
+
+def test_reopen_without_external_change_keeps_log(seg_file):
+    Session(seg_file).add(edit("one", 1, "화자2", "화자1"))
+    s = Session(seg_file)
+    assert s.notice == "" and len(s.edits) == 1

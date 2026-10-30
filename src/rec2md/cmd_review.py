@@ -201,6 +201,8 @@ def main(argv: list[str]) -> None:
         if not args.segments.is_file():
             raise SystemExit(f"파일 없음: {args.segments}")
         session = Session(args.segments)
+        if session.notice:
+            log(session.notice)
         audio = args.audio or find_audio(args.segments.parent, session.current.source)
     if audio is None:
         log("오디오를 찾지 못함 — 재생 없이 연다 (--audio로 지정)")
