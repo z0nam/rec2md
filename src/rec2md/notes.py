@@ -23,8 +23,9 @@ from .series import _STOP, _TOKEN, _strip_josa, doc_text
 
 WINDOW_SEC = 30.0
 TOP_K = 3
-MIN_SCORE = 1.0      # 이보다 낮은 창은 근거 후보로 내지 않는다
+MIN_SCORE = 2.0      # 이보다 낮은 창은 근거 후보로 내지 않는다 (흔한 낱말 하나만 겹친 창 제외)
 UNCOVERED_SEC = 20.0
+UNCOVERED_GAP = 10.0  # uncovered 구간을 이을 때 허용하는 세그먼트 사이 공백(초)
 COVER_RATIO = 0.75   # 1순위 점수의 이 비율 이상인 후보만 "메모가 다룬 구간"으로 친다  # 어느 문단도 가리키지 않는 녹취 구간이 이보다 길면 보고한다
 
 W_NUMBER, W_NAME, W_WORD = 3.0, 2.5, 1.0
@@ -179,7 +180,8 @@ def align(paras: list[str] | list[tuple[str, str]], t: Transcript, names: set[st
         df[key] = sum(_has(w, key, kind) for w in wins)
 
     def idf(k: str) -> float:
-        return math.log((n + 1) / (df[k] + 0.5))
+        # 매끄럽게 한 IDF: 모든 창에 나오는 낱말도 1. 창이 하나뿐인 짧은 녹취에서도 정확히 겹치면 후보가 남는다
+        return 1.0 + math.log((n + 1) / (df[k] + 1))
 
     covered: list[tuple[float, float]] = []
     for p in keyed:
@@ -200,7 +202,7 @@ def align(paras: list[str] | list[tuple[str, str]], t: Transcript, names: set[st
             # 약한 2·3순위까지 치면 메모에서 빠진 논의가 가려진다
             if score >= COVER_RATIO * best[0][0] and len(hit) >= 2:
                 covered.append((w.start, w.end))
-    return keyed, uncovered(wins, covered)
+    return keyed, uncovered(t, covered)
 
 
 def _dedupe(scored: list) -> list:
@@ -212,39 +214,25 @@ def _dedupe(scored: list) -> list:
     return out
 
 
-def uncovered(wins: list[Window], covered: list[tuple[float, float]], min_sec: float = UNCOVERED_SEC) -> list[dict]:
-    """어느 문단의 근거 후보에도 걸리지 않은 녹취 구간을 이어 붙여, min_sec 이상인 것만."""
+def uncovered(t: Transcript, covered: list[tuple[float, float]], min_sec: float = UNCOVERED_SEC,
+              gap: float = UNCOVERED_GAP) -> list[dict]:
+    """어느 문단의 근거 후보에도 걸리지 않은 녹취 구간. 창이 아니라 세그먼트 단위로 빼야
+    일부만 다뤄진 창 안의 빠진 논의(주제가 바뀌는 경계)가 사라지지 않는다.
+    gap초 이내로 이어지는 세그먼트를 한 구간으로 묶고, min_sec 이상인 것만 낸다."""
+    names = t.meta.get("speaker_names") or {}
     spans: list[list] = []
-    for w in wins:
-        if any(not (w.end <= a or w.start >= b) for a, b in covered):
+    for s in t.segments:
+        if not s.text.strip() or any(not (s.end <= a or s.start >= b) for a, b in covered):
             continue
-        if spans and w.start <= spans[-1][1]:
-            spans[-1][1] = max(spans[-1][1], w.end)
-            spans[-1][2].append(w)
+        if spans and s.start - spans[-1][1] <= gap:
+            spans[-1][1] = s.end
+            spans[-1][2].append(s)
         else:
-            spans.append([w.start, w.end, [w]])
-    out = []
-    for a, b, ws in spans:
-        if b - a >= min_sec:
-            text, speakers = [], []
-            for w in ws:
-                text.append(w.text)
-                speakers += w.speakers
-            out.append({"start": a, "end": b, "ts": fmt_ts(a), "speakers": list(dict.fromkeys(speakers)),
-                        "text": _join_overlapping(text)})
-    return out
-
-
-def _join_overlapping(texts: list[str]) -> str:
-    """반씩 겹친 창 본문을 이을 때 앞 창과 겹치는 앞부분을 뺀다."""
-    out = ""
-    for t in texts:
-        if not out:
-            out = t
-            continue
-        k = next((k for k in range(min(len(out), len(t)), 0, -1) if out.endswith(t[:k])), 0)
-        out += ("" if k else " ") + t[k:]
-    return out
+            spans.append([s.start, s.end, [s]])
+    return [{"start": a, "end": b, "ts": fmt_ts(a),
+             "speakers": list(dict.fromkeys(speaker_name(x.speaker, names) for x in segs if x.speaker)),
+             "text": " ".join(x.text.strip() for x in segs)}
+            for a, b, segs in spans if b - a >= min_sec]
 
 
 def write_align(memo: Path, seg_path: Path, out: Path, names: set[str] | None = None, top_k: int = TOP_K,

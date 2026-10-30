@@ -96,3 +96,24 @@ def test_cli_rejects_unknown_series(tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="시리즈 없음"):
         cmd_notes.main([str(SEGS), str(MEMO), "--to-series", "없음", "--out", str(tmp_path)])
     assert not list(tmp_path.glob("*.notes-align.json"))   # 시리즈가 없으면 아무것도 쓰지 않는다
+
+
+def _transcript(texts: list[str], seg_sec: float = 10.0) -> Transcript:
+    from rec2md.segments import Segment
+    segs = [Segment(i * seg_sec, (i + 1) * seg_sec, x, "화자1") for i, x in enumerate(texts)]
+    return Transcript("synthetic.wav", len(texts) * seg_sec, "test", "ko", segs, {})
+
+
+def test_uncovered_keeps_tail_of_partially_covered_window():
+    """10초 세그먼트 5개 → 창 [0,30], [20,50]. 메모가 [0,30]만 다뤄도 [30,50]의 빠진 논의는 남는다."""
+    t = _transcript(["예산 총액 3억 원 확정", "예산 집행 일정 확인", "예산 항목 검토 마무리",
+                     "주차장 협약서 문제 논의", "주차장 개인정보 처리 방안"])
+    _, unc = notes.align(["예산 총액 3억 원 확정 집행 일정 항목 검토"], t)
+    assert [(u["start"], u["end"]) for u in unc] == [(30.0, 50.0)] and "주차장" in unc[0]["text"]
+
+
+def test_single_window_exact_match_has_candidate():
+    """창이 하나뿐인 짧은 녹취에서도 정확히 겹치는 문단은 근거 후보가 생긴다."""
+    t = _transcript(["주차장 이용률 데이터는 시청에서 받기로 함"])
+    paras, _ = notes.align(["주차장 이용률 데이터"], t)
+    assert paras[0].candidates and paras[0].candidates[0].ts == "00:00:00"
