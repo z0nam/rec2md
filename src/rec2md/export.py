@@ -38,15 +38,31 @@ def find_chrome() -> str | None:
     return None
 
 
-def html_to_pdf(src: Path, out: Path) -> Path:
+def _pdf_complete(p: Path) -> bool:
+    """끝까지 쓰인 pdf인가: %PDF-로 시작하고 끝 부분에 %%EOF가 있다."""
+    try:
+        data = p.read_bytes()
+    except OSError:
+        return False
+    return data.startswith(b"%PDF-") and b"%%EOF" in data[-1024:]
+
+
+def html_to_pdf(src: Path, out: Path, attempts: int = 2) -> Path:
     if chrome := find_chrome():
-        with tempfile.TemporaryDirectory(prefix="rec2md-chrome-") as profile:
-            r = subprocess.run([chrome, "--headless", "--disable-gpu", "--no-pdf-header-footer",
-                                f"--user-data-dir={profile}", f"--print-to-pdf={out.resolve()}",
-                                src.resolve().as_uri()], capture_output=True, text=True, timeout=120)
-        if r.returncode != 0 or not out.is_file():
-            raise ExportError(f"Chrome pdf 변환 실패: {r.stderr.strip()[-500:]}")
-        return out
+        err = ""
+        for _ in range(attempts):
+            out.unlink(missing_ok=True)
+            with tempfile.TemporaryDirectory(prefix="rec2md-chrome-") as profile:
+                r = subprocess.run([chrome, "--headless", "--disable-gpu", "--no-pdf-header-footer",
+                                    "--no-first-run", "--no-default-browser-check", "--disable-extensions",
+                                    f"--user-data-dir={profile}", f"--print-to-pdf={out.resolve()}",
+                                    src.resolve().as_uri()], capture_output=True, text=True, timeout=120)
+            # 부하가 걸리면 Chrome이 pdf를 다 쓴 뒤 종료 정리에서 "Teardown watchdog expired"로 0이 아닌
+            # 코드를 낸다. 종료 코드가 아니라 결과 파일로 판단하고, 파일이 덜 됐을 때만 다시 시도한다
+            if _pdf_complete(out):
+                return out
+            err = f"종료 코드 {r.returncode}: {r.stderr.strip()[-500:]}"
+        raise ExportError(f"Chrome pdf 변환 실패 ({attempts}회 시도) — {err}")
     try:
         import weasyprint
     except ModuleNotFoundError:
