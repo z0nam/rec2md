@@ -101,7 +101,7 @@ def _voices(t: Transcript, seg_path: Path, embs: dict, seg_embs: list, turns: li
 
 
 # `rec2md <서브커맨드> ...`는 rec2md.cmd_<이름>.main(argv)로 넘긴다. 그 외 인자는 전사 대상 파일
-SUBCOMMANDS = {"voices", "render", "series", "bounds", "notes"}
+SUBCOMMANDS = {"voices", "render", "series", "bounds", "notes", "batch"}
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -116,8 +116,19 @@ def main(argv: list[str] | None = None) -> None:
                 raise
             raise SystemExit(f"아직 구현되지 않은 명령: {argv[0]}") from e
         return mod.main(argv[1:])
-    p = argparse.ArgumentParser(prog="rec2md", description="녹음·영상 → 화자 구분 녹취록 Markdown")
-    p.add_argument("inputs", nargs="+", type=Path, help="오디오/영상 파일 (mp3, m4a, wav, mp4, mov …)")
+    args = build_parser().parse_args(argv)
+
+    for src in args.inputs:
+        if not src.is_file():
+            raise SystemExit(f"파일 없음: {src}")
+        run_one(src, args)
+
+
+def build_parser(prog: str = "rec2md", inputs: bool = True) -> argparse.ArgumentParser:
+    """전사(run_one) 옵션 파서. `rec2md batch`도 같은 옵션을 받으려고 따로 뺐다."""
+    p = argparse.ArgumentParser(prog=prog, description="녹음·영상 → 화자 구분 녹취록 Markdown")
+    if inputs:
+        p.add_argument("inputs", nargs="+", type=Path, help="오디오/영상 파일 (mp3, m4a, wav, mp4, mov …)")
     p.add_argument("--engine", default="local", choices=["local"])
     p.add_argument("--model", help="엔진별 모델 (local 기본: whisper-large-v3-turbo)")
     p.add_argument("--language", default="ko")
@@ -131,12 +142,7 @@ def main(argv: list[str] | None = None) -> None:
                    help="이번 회의 자료 (md·txt·hwpx·docx·pdf) → 용어 후보. 여러 개면 반복")
     p.add_argument("--no-prompt", dest="prompt", action="store_false",
                    help="맥락을 Whisper initial_prompt로 넘기지 않음 (보정 후보 추출만)")
-    args = p.parse_args(argv)
-
-    for src in args.inputs:
-        if not src.is_file():
-            raise SystemExit(f"파일 없음: {src}")
-        run_one(src, args)
+    return p
 
 
 if __name__ == "__main__":

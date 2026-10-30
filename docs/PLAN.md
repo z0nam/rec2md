@@ -45,10 +45,12 @@ rec2md <audio> [--engine local|rtzr|clova]  # 기본 local [--call] [--speakers 
   - 30초 미만 빈 파일 15개 → 건너뜀.
   - **4시간 초과 8개**(최장 360분) → local은 메모리 관리를 위해, 클라우드는 RTZR 4h 제한 때문에 무음 지점 기준 분할 후 이어붙이기 필요(화자 라벨은 청크 간 불연속 — 정리 단계에서 Claude가 맞춤).
   - `YYYYMMDD_주제.MP3`로 이름 붙인 파일과 `REC000NN.MP3`가 섞여 있음. `REC000NN`은 녹음기 시계가 없어 수정일 1601년 → 날짜·주제는 내용에서 추론.
-- `rec2md batch <dir> [--engine ...] [--dry-run]`
-  - `--dry-run`: ffprobe로 총 재생시간과 엔진별 예상 비용 출력.
-  - 처리한 파일은 상태 파일(`.rec2md-state.json`)에 기록해 건너뜀 → 중단 후 재개 가능.
-  - 출력은 `<dir>/_transcripts/`에 모음.
+- `rec2md batch <dir> [--dry-run] [--min-sec 30] [--out <dir>] [전사 옵션 …]` (`cmd_batch.py`, 이슈 #10)
+  - 대상은 `<dir>` 바로 아래의 mp3·m4a·wav·mp4·mov(대소문자 무시, 재귀 없음). 전사 옵션은 `rec2md <파일>`과 같다.
+  - `--dry-run`: ffprobe로 파일별 길이와 판정(처리·재시도·이미 처리·짧음·분할 필요·길이 확인 실패), 처리 대상 총 길이, local 예상 처리시간(실시간 12배 가정)을 표로 출력.
+  - 상태 파일 `<out>/.rec2md-state.json`(`{파일명: {status: done|failed, sec, error}}`): done은 건너뛰고 failed는 다시 시도. 한 파일이 실패해도 다음으로 넘어가고, 실패가 있으면 종료 코드 1 → 같은 명령으로 재개.
+  - 출력은 기본 `<dir>/_transcripts/`.
+  - 4시간 초과 파일은 아직 분할하지 않고 "분할 필요"로 표시만 하고 건너뜀(분할은 별도 이슈).
 - `REC000NN` 파일: 요약 기반으로 `YYYYMMDD?_주제` 제목을 제안하는 `index.md` 생성. 실제 파일명 변경은 사용자 확인 후.
 - 비용: 백로그는 studio local로 처리(추가 비용 없음, 처리시간은 파일럿 실측 후 산정). 참고로 RTZR로 전부 돌리면 188시간 ≈ 18〜19만원.
 
