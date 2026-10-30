@@ -114,3 +114,13 @@ def test_collapse_ngram_loops_keeps_natural_repeats():
 def test_collapse_ngram_loops_three_token_loop():
     res = collapse_ngram_loops([_seg(["다", "나", "가"] * 6)])
     assert [w.text.strip() for w in res[0].words] == ["다", "나", "가"] * 3
+
+
+def test_collapse_ngram_loops_resets_across_pauses():
+    # 4초 간격으로 네 번 말한 "확인 완료."는 루프가 아니라 각각의 발화다
+    words = []
+    for k in range(4):
+        words += [Word(k * 4.0, k * 4.0 + 0.3, " 확인"), Word(k * 4.0 + 0.35, k * 4.0 + 0.7, " 완료.")]
+    seg = Segment(0.0, words[-1].end, "".join(w.text for w in words).strip(), words=words)
+    res = collapse_ngram_loops([seg])
+    assert len(res[0].words) == 8 and res[0].end == words[-1].end

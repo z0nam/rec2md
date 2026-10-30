@@ -51,21 +51,27 @@ def collapse_ngram_loops(segs: list[Segment]) -> list[Segment]:
     collapse_repeats는 같은 토큰의 연속만 보므로 "가나 bar, 가나 bar, …"처럼 두 토큰이 번갈아 도는
     루프를 놓친다(실측: 64분 회의에서 한 세그먼트가 55회 반복, 회의 뒤 구간 CER 35%→53%).
     한 세그먼트 안에서만 본다. 같은 토큰 하나로 된 묶음은 collapse_repeats 몫이다.
+    단어 사이가 LOOP_GAP보다 벌어지면 반복 세기를 끊는다. 쉬었다가 같은 말을 다시 한 것은 진짜 발화다.
     """
     for s in segs:
         if not s.words:
             continue
-        keys = [_norm(w.text) for w in s.words]
+        words = s.words
+
+        def tight(a: int, b: int) -> bool:  # words[a:b]가 끊김 없이 붙어 있는가
+            return all(words[j].start - words[j - 1].end <= LOOP_GAP for j in range(max(a, 1), b))
+
+        keys = [_norm(w.text) for w in words]
         drop = [False] * len(keys)
         for p in range(2, MAX_PERIOD + 1):
             i = 0
             while i + p * (MAX_REPEAT + 1) <= len(keys):
                 unit = keys[i:i + p]
-                if not all(unit) or len(set(unit)) == 1 or any(drop[i:i + p]):
+                if not all(unit) or len(set(unit)) == 1 or any(drop[i:i + p]) or not tight(i + 1, i + p):
                     i += 1
                     continue
                 k = 1
-                while keys[i + k * p:i + (k + 1) * p] == unit:
+                while keys[i + k * p:i + (k + 1) * p] == unit and tight(i + k * p, i + (k + 1) * p):
                     k += 1
                 if k > MAX_REPEAT:
                     for j in range(i + MAX_REPEAT * p, i + k * p):
