@@ -126,3 +126,18 @@ def test_interval_end_at_join_stays_in_previous_span():
     seg = Segment(95.0, 100.0, "끝", "화자1", words=[Word(98.0, 100.0, "끝", 0.2)], low_conf=[[98.0, 100.0, 0.2, "끝"]])
     trim.remap_segments([seg], m)
     assert (seg.start, seg.end, seg.words[0].end, seg.low_conf[0][1]) == (95.0, 100.0, 100.0, 100.0)
+
+
+def test_min_gap_sets_which_silences_are_cut():
+    db = profile(("s", 600), ("n", 200), ("s", 600))  # 회의 중 3분 남짓 침묵
+    assert not trim.plan(db).trims()
+    p = trim.plan(db, min_gap=120.0)
+    assert p.trims() and p.min_gap == 120.0
+    assert trim.meta(p, trim.OffsetMap(p.keep))["min_gap"] == 120.0
+
+
+def test_cli_trim_min_gap_in_minutes():
+    assert cli.trim_min_gap(cli.build_parser().parse_args(["x.mp3"])) == trim.MIN_GAP
+    assert cli.trim_min_gap(cli.build_parser().parse_args(["x.mp3", "--trim-min-gap", "10"])) == 600.0
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["x.mp3", "--trim-min-gap", "0.5"])

@@ -9,7 +9,7 @@
   done은 건너뛰고 failed는 다시 시도한다. 파일 하나가 실패해도 다음으로 넘어간다 → 중단 후 같은 명령으로 이어서.
 - 출력 이름이 겹치는 파일은 처리하지 않고 "이름 겹침"으로 표시한다: 같은 폴더의 `회의.mp3`·`회의.wav`(출력이
   둘 다 `회의.segments.json`), 또는 같은 출력 폴더를 이미 다른 원본(다른 폴더의 같은 이름 파일)이 쓴 경우.
-- 녹음기를 안 꺼서 생긴 긴 무음은 전사 전에 잘라낸다(`trim`, --no-trim으로 끔). 그래서 dry-run은 파일 길이와
+- 녹음기를 안 꺼서 생긴 긴 무음은 전사 전에 잘라낸다(`trim`, --no-trim으로 끔, 기준 길이는 --trim-min-gap). 그래서 dry-run은 파일 길이와
   함께 소리 크기로 추정한 말소리 길이를 보여 주고, "분할 필요"(4시간 초과)도 말소리 길이로 판단한다.
   잘라낸 뒤에도 4시간이 넘는 파일은 건너뛴다(청크 분할은 아직 없음).
 """
@@ -51,9 +51,9 @@ class Item:
         return self.speech if self.speech is not None else (self.sec or 0.0)
 
 
-def speech_sec(path: Path) -> float:
+def speech_sec(path: Path, min_gap: float = trim.MIN_GAP) -> float:
     """소리 크기만 보고 추정한 말소리 길이(trim이 남길 길이)."""
-    return trim.plan(trim.loudness_file(path)).kept_sec
+    return trim.plan(trim.loudness_file(path), min_gap).kept_sec
 
 
 def media_files(d: Path) -> list[Path]:
@@ -110,13 +110,14 @@ def _same_source(f: Path, name: str, rec: dict) -> bool:
         return False
 
 
-def plan(files: list[Path], state: dict, min_sec: float, estimate: bool = True) -> list[Item]:
+def plan(files: list[Path], state: dict, min_sec: float, estimate: bool = True,
+         min_gap: float = trim.MIN_GAP) -> list[Item]:
     """파일마다 판정. `estimate`면 처리할 파일의 말소리 길이를 추정해 분할 필요 여부를 그것으로 정한다."""
     items = _plan_by_length(files, state, min_sec)
     todo = [i for i in items if i.plan in (TODO, RETRY, SPLIT)]
     if estimate and todo:
         with ThreadPoolExecutor(PROBE_WORKERS) as ex:
-            for item, sp in zip(todo, ex.map(_safe_speech, [i.path for i in todo])):
+            for item, sp in zip(todo, ex.map(lambda f: _safe_speech(f, min_gap), [i.path for i in todo])):
                 item.speech = sp
     for i in todo:
         if i.work > MAX_SEC:
@@ -127,9 +128,9 @@ def plan(files: list[Path], state: dict, min_sec: float, estimate: bool = True) 
     return items
 
 
-def _safe_speech(path: Path) -> float | None:
+def _safe_speech(path: Path, min_gap: float = trim.MIN_GAP) -> float | None:
     try:
-        return speech_sec(path)
+        return speech_sec(path, min_gap)
     except Exception:  # 추정이 안 되면 파일 길이 그대로 본다
         return None
 
@@ -201,7 +202,7 @@ def main(argv: list[str]) -> None:
     files = media_files(src_dir)
     if not files:
         raise SystemExit(f"처리할 녹음·영상이 없음: {src_dir} ({', '.join(sorted(MEDIA_EXTS))})")
-    items = plan(files, state, args.min_sec, estimate=not args.no_trim)
+    items = plan(files, state, args.min_sec, estimate=not args.no_trim, min_gap=cli.trim_min_gap(args))
     print(report(items))
     if args.dry_run:
         return

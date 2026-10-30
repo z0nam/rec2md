@@ -49,7 +49,7 @@ def run_one(src: Path, args) -> Path:
         wav = audio.normalize(src, Path(td) / "audio.wav")
         offsets = None
         if not getattr(args, "no_trim", False):
-            wav, offsets = _trim_silence(wav, Path(td) / "trimmed.wav", meta)
+            wav, offsets = _trim_silence(wav, Path(td) / "trimmed.wav", meta, trim_min_gap(args))
 
         turns = regions = None
         embs: dict = {}
@@ -100,11 +100,25 @@ def run_one(src: Path, args) -> Path:
     return raw_path
 
 
-def _trim_silence(wav: Path, out: Path, meta: dict):
+def trim_min_gap(args) -> float:
+    """--trim-min-gap(분) → 초. 옵션이 없는 args(테스트 등)는 기본값."""
+    from . import trim
+    m = getattr(args, "trim_min_gap", None)
+    return trim.MIN_GAP if m is None else m * 60.0
+
+
+def _min_gap_minutes(v: str) -> float:
+    m = float(v)
+    if not m >= 1:  # 판정 창이 1분이라 그보다 짧은 무음은 가릴 수 없다
+        raise argparse.ArgumentTypeError("1분 이상이어야 함")
+    return m
+
+
+def _trim_silence(wav: Path, out: Path, meta: dict, min_gap: float | None = None):
     """긴 무음(녹음기를 안 끈 공백)을 빼고 이어 붙인 wav를 만든다. 자를 게 없으면 (wav, None)."""
     from . import trim
     data = audio.load_wav(wav)
-    p = trim.plan(trim.loudness(data))
+    p = trim.plan(trim.loudness(data), trim.MIN_GAP if min_gap is None else min_gap)
     if not p.trims():
         return wav, None
     m = trim.OffsetMap(p.keep)
@@ -164,7 +178,9 @@ def build_parser(prog: str = "rec2md", inputs: bool = True) -> argparse.Argument
     p.add_argument("--no-vad", action="store_true", help="말소리 구간 청킹 없이 파일 전체를 한 번에 전사")
     p.add_argument("--no-voices", action="store_true", help="목소리 DB로 화자 실명 붙이기 생략")
     p.add_argument("--no-trim", action="store_true",
-                   help="5분 넘는 무음(녹음기를 안 끈 공백)을 잘라내지 않고 그대로 처리")
+                   help="긴 무음(녹음기를 안 끈 공백)을 잘라내지 않고 그대로 처리")
+    p.add_argument("--trim-min-gap", type=_min_gap_minutes, metavar="분",
+                   help="이 길이(분) 이상 이어지는 무음만 잘라냄 (기본 5분, 1분 이상)")
     p.add_argument("--out", help="출력 폴더 (기본: 원본 옆)")
     p.add_argument("--series", help="회의 시리즈 맥락 (~/.config/rec2md/series/<이름>, rec2md series init)")
     p.add_argument("--context", action="append", type=Path,
