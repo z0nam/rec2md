@@ -133,23 +133,35 @@ class Template:
         return re.sub(r"\s*-\s*", self.time_sep, s) if self.time_sep != "-" else s
 
     def attendee_lines(self, m: Minutes) -> list[str]:
+        """이름이 비고 직위만 있으면 직위로("주무관"), 이름·직위가 다 비면 그 사람은 뺀다.
+        소속만 있는 항목은 소속 줄만 남긴다(예: "○○과" 관계자)."""
         def who(a) -> str:
+            if not a.name:
+                return a.role
             return f"{a.name} {a.role}" if self.attendee_role and a.role else a.name
 
         if self.attendee_style == "flat":
             out = []
+            named_orgs = {a.org for a in m.attendees if who(a)}
             for a in m.attendees:
-                extra = " ".join(x for x in (a.org, a.role if not self.attendee_role else "") if x)
-                out.append(f"{who(a)}({extra})" if extra else who(a))
+                # 직위를 이름 자리에 썼으면 괄호에 다시 넣지 않는다
+                role_in_paren = a.role if a.name and not self.attendee_role else ""
+                extra = " ".join(x for x in (a.org, role_in_paren) if x)
+                if w := who(a):
+                    out.append(f"{w}({extra})" if extra else w)
+                elif a.org and a.org not in named_orgs and a.org not in out:  # 이미 나온 소속은 다시 안 씀
+                    out.append(a.org)
             return [", ".join(out)] if out else []
         groups: dict[str, list[str]] = {}
         for a in m.attendees:  # 처음 나온 소속 순서를 지킨다
-            groups.setdefault(a.org, []).append(who(a))
+            names = groups.setdefault(a.org, [])
+            if w := who(a):
+                names.append(w)
         lines = []
         for org, names in groups.items():
             if org:
-                lines += [org, "- " + ", ".join(names)]
-            else:
+                lines += [org] + (["- " + ", ".join(names)] if names else [])
+            elif names:
                 lines.append(", ".join(names))
         return lines
 

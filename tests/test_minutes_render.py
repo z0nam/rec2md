@@ -206,3 +206,26 @@ def test_cli_export_multiple_sources_do_not_overwrite(tmp_path, monkeypatch):
     assert (tmp_path / "m.docx.p1.png").read_text(encoding="utf-8") == "png from docx"
     assert (tmp_path / "m.hwpx.p1.png").read_text(encoding="utf-8") == "png from hwpx"
     assert not (tmp_path / "m.pdf").exists() and not (tmp_path / "m.p1.png").exists()
+
+
+@pytest.mark.parametrize("style,role,expected", [
+    ("org", False, ["가나연구원", "- 홍길동, 주무관", "다라시 교통과", "박민수"]),
+    ("org", True, ["가나연구원", "- 홍길동 연구위원, 주무관", "다라시 교통과", "박민수 자문위원"]),
+    ("flat", False, ["홍길동(가나연구원 연구위원), 주무관(가나연구원), 다라시 교통과, 박민수(자문위원)"]),
+])
+def test_attendees_with_empty_name(tmp_path, style, role, expected):
+    """이름이 비면 직위로, 이름·직위가 다 비면 빼서 "- 홍길동," 같은 남는 쉼표가 없어야 한다."""
+    from rec2md.minutes import Attendee
+    m = Minutes(title="t", attendees=[
+        Attendee("홍길동", "가나연구원", "연구위원"),
+        Attendee("", "가나연구원", "주무관"),
+        Attendee("", "가나연구원", ""),          # 이름·직위 없음 → 뺌
+        Attendee("", "다라시 교통과", ""),       # 소속만 → 소속 줄만
+        Attendee("박민수", "", "자문위원"),
+        Attendee("", "", ""),                   # 다 비었음 → 뺌
+    ])
+    t = load_template("ji")
+    t.attendee_style, t.attendee_role = style, role
+    lines = t.attendee_lines(m)
+    assert lines == expected
+    assert not any(x.rstrip().endswith(",") or ", ," in x or x.strip() in ("-", "") for x in lines)
