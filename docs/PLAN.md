@@ -69,13 +69,27 @@ rec2md <audio> [--engine local|rtzr|clova]  # 기본 local [--call] [--speakers 
 - Mac: `brew install ffmpeg`, `uv tool install` 후 mlx-whisper·pyannote 설치. Hugging Face 토큰과 pyannote 모델 약관 동의 필요.
 - Windows에서 Mac으로 SSH 키 접속 확인
 
+## 진행/완료 (2026-10-30 착수분)
+설계는 `docs/features-202610.md`, 분배는 `docs/workplan-202610.md`. 사용법은 `README.md`.
+
+| 항목 | 상태 | 명령·결과 | PR·이슈 |
+|---|---|---|---|
+| 회의록 자동 생성·다형식 내보내기 | 완료 | 에이전트가 `minutes.json` → `rec2md render --template kr-standard\|ji\|<사용자> --format md,html,docx,hwpx --export pdf,png`. 회사 원본은 `~/.config/rec2md/templates/<이름>/` | #9, #13, #14, #16 |
+| 회의 맥락 보정 | 완료 | `rec2md series ...`, `rec2md <audio> --series --context`, `<이름>.corrections.json`. 수치는 아래 "맥락 보정 1차" | #15 |
+| 테스트 기반·CI | 완료 | `uv run pytest`, GitHub Actions(맥·리눅스) | #7 |
+| 클로바식 녹취록 내보내기 | 진행 | `rec2md render <segments.json> --kind transcript --format txt,md,html` | #8 (이슈 #6) |
+| 화자 목소리 DB·자동 태깅 | 진행 | `rec2md voices enroll\|match\|list\|rename\|forget`, `meta.speaker_names`(`tentative`, `same_as`, `source: "user"`) | worker-1 |
+| 폴더 일괄 처리 | 진행 | `rec2md batch <dir> --dry-run`, 상태 파일로 이어서 | 이슈 #10 |
+| 검토 화면 | 진행 | `rec2md review <segments.json>`: 클릭 재생, 화자 고치기 | 이슈 #12 |
+
+- 회의 메모 보정은 "자료 → 용어 후보"(`--context`) 부분만 맥락 보정에 흡수됐다. 메모와 녹취를 대조해 빠진 논의·틀린 수치를 표시하는 부분은 아래 위시리스트에 남는다.
+
 ## 위시리스트
-- **2026-10-30 검토 → 착수**: 화자 목소리 DB, 회의 맥락 보정(회의 메모 보정을 흡수), 회의록 자동 생성·다형식 내보내기. 설계는 `docs/features-202610.md`, 분배는 `docs/workplan-202610.md`.
-- **회의 메모 보정** (2026-10-16 요청): 같은 회의에서 타이핑한 정리물(메모·회의록 초안)이 있으면 녹취를 근거로 보정한다.
+- **회의 메모 보정** (2026-10-16 요청, 용어 사전 부분은 맥락 보정으로 완료): 같은 회의에서 타이핑한 정리물(메모·회의록 초안)이 있으면 녹취를 근거로 보정한다.
   - 메모를 기준 문서로 두고 녹취에서 빠진 논의·결정·수치, 잘못 적힌 발언자·숫자, 메모에만 있고 녹취엔 없는 주장을 표시.
   - 반대로 메모의 인명·용어를 STT 오인식 교정 사전으로 활용(녹취록 품질도 같이 올라감).
   - 형태: `rec2md <audio> --notes <memo.md|docx|hwpx>` → 후처리 단계에서 Claude가 대조. 보정본은 변경 근거(타임스탬프)를 달아 원본 메모와 diff로 볼 수 있게.
-- **화자 태깅** (2026-10-16 요청): `화자1`·`화자2` 대신 실명을 붙인다.
+- **화자 태깅** (2026-10-16 요청 → 진행 중, 위 표 "화자 목소리 DB"): `화자1`·`화자2` 대신 실명을 붙인다.
   - 자주 등장하는 사람(본인·팀원)의 목소리 샘플로 화자 임베딩(pyannote embedding)을 등록해 두고, 새 녹취의 화자 클러스터와 코사인 유사도로 매칭. 임계값 미만이면 `화자N` 유지.
   - 등록 DB는 개인 데이터라 `~/.config/rec2md/voices/`에 둔다(레포 밖). 처음엔 사람이 확인한 녹취록에서 `화자1=이름` 대응을 받아 그 구간으로 자동 등록.
   - 수동 지정 경로도 둔다: `--names "화자1=홍길동,화자2=..."` 또는 스킬 정리 단계에서 에이전트가 추정한 이름을 확정.
