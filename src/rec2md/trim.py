@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import subprocess
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 
 import numpy as np
@@ -137,8 +137,10 @@ class OffsetMap:
             acc += e - s
         self.length = acc
 
-    def to_original(self, t: float) -> float:
-        i = max(0, bisect_right(self.starts, t) - 1)
+    def to_original(self, t: float, end: bool = False) -> float:
+        """`end`면 구간의 끝 시각: 이어 붙인 경계에 정확히 걸리면 앞 구간의 끝으로 본다
+        (뒤 구간의 시작으로 보면 잘라낸 공백 전체가 그 구간에 들어간다)."""
+        i = max(0, (bisect_left if end else bisect_right)(self.starts, t) - 1)
         s, e = self.keep[i]
         return min(s + (t - self.starts[i]), e)
 
@@ -153,17 +155,17 @@ def cut_audio(wav: np.ndarray, keep: list[tuple[float, float]], rate: int = SAMP
 
 def remap_segments(segs: list, m: OffsetMap) -> None:
     for s in segs:
-        s.start, s.end = m.to_original(s.start), m.to_original(s.end)
+        s.start, s.end = m.to_original(s.start), m.to_original(s.end, end=True)
         for w in getattr(s, "words", None) or []:
-            w.start, w.end = m.to_original(w.start), m.to_original(w.end)
+            w.start, w.end = m.to_original(w.start), m.to_original(w.end, end=True)
         if getattr(s, "low_conf", None):
             for sp in s.low_conf:
-                sp[0], sp[1] = round(m.to_original(sp[0]), 2), round(m.to_original(sp[1]), 2)
+                sp[0], sp[1] = round(m.to_original(sp[0]), 2), round(m.to_original(sp[1], end=True), 2)
 
 
 def remap_spans(spans: list[tuple], m: OffsetMap) -> list[tuple]:
     """(start, end, …) 튜플 목록(화자분리 turn, 구간 임베딩)의 앞 두 값을 원본 시각으로."""
-    return [(m.to_original(a), m.to_original(b), *rest) for a, b, *rest in spans]
+    return [(m.to_original(a), m.to_original(b, end=True), *rest) for a, b, *rest in spans]
 
 
 def meta(p: Plan, m: OffsetMap) -> dict:

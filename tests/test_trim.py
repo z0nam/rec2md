@@ -116,3 +116,13 @@ def test_review_marks_cut_windows_with_faint_sound():
     m = trim.OffsetMap(p.keep)
     assert trim.meta(p, m)["review"]
     assert not trim.plan(profile(("s", 600), ("n", 1800), ("s", 600))).review  # 드문 튐만 있으면 없음
+
+
+def test_interval_end_at_join_stays_in_previous_span():
+    """경계에서 끝나는 구간은 앞 구간 끝으로 — 잘라낸 공백을 포함하지 않는다 (Codex 리뷰 #31)."""
+    m = trim.OffsetMap([(0.0, 100.0), (400.0, 450.0)])
+    assert trim.remap_spans([(90.0, 100.0, "SPEAKER_00")], m) == [(90.0, 100.0, "SPEAKER_00")]
+    assert trim.remap_spans([(100.0, 110.0, "SPEAKER_01")], m) == [(400.0, 410.0, "SPEAKER_01")]  # 시작은 뒤 구간
+    seg = Segment(95.0, 100.0, "끝", "화자1", words=[Word(98.0, 100.0, "끝", 0.2)], low_conf=[[98.0, 100.0, 0.2, "끝"]])
+    trim.remap_segments([seg], m)
+    assert (seg.start, seg.end, seg.words[0].end, seg.low_conf[0][1]) == (95.0, 100.0, 100.0, 100.0)
