@@ -17,6 +17,7 @@ import numpy as np
 
 from .render import fmt_ts
 from .segments import Transcript
+from .speakers import user_names  # noqa: F401  (계약은 speakers.py, voices.user_names로도 쓴다)
 
 DB_PATH = Path(os.environ.get("REC2MD_VOICES_DB", Path.home() / ".config" / "rec2md" / "voices" / "voices.db"))
 THRESHOLD = 0.75  # eval_voices 실측(2026-10-30, 녹취 5건): 같은 사람 최저 0.85, 다른 사람 최고 0.66
@@ -161,12 +162,6 @@ class VoiceDB:
                 "SELECT p.name, e.vec FROM embedding e JOIN person p ON p.id = e.person_id"):
             out.setdefault(name, []).append(np.frombuffer(blob, dtype=np.float32))
         return {k: np.stack(v) for k, v in out.items()}
-
-
-def user_names(t: Transcript) -> dict[str, str]:
-    """meta.speaker_names 중 사용자가 지정한 것(source == "user")을 {화자N: 이름}으로."""
-    return {lb: d["name"] for lb, d in (t.meta.get("speaker_names") or {}).items()
-            if isinstance(d, dict) and d.get("source") == "user" and d.get("name")}
 
 
 def enroll(db: VoiceDB, sidecar: dict[str, tuple[np.ndarray, float]], mapping: dict[str, str],

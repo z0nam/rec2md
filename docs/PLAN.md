@@ -81,7 +81,7 @@ rec2md <audio> [--engine local|rtzr|clova]  # 기본 local [--call] [--speakers 
 | 클로바식 녹취록 내보내기 | 진행 | `rec2md render <segments.json> --kind transcript --format txt,md,html` | #8 (이슈 #6) |
 | 화자 목소리 DB·자동 태깅 | 진행 | `rec2md voices enroll\|match\|list\|rename\|forget`, `meta.speaker_names`(`tentative`, `same_as`, `source: "user"`) | worker-1 |
 | 폴더 일괄 처리 | 진행 | `rec2md batch <dir> --dry-run`, 상태 파일로 이어서 | 이슈 #10 |
-| 검토 화면 | 진행 | `rec2md review <segments.json>`: 클릭 재생, 화자 고치기 | 이슈 #12 |
+| 검토 화면 | 진행 | `rec2md review <segments.json>`: 클릭 재생, 화자 변경 3범위(영향 미리보기, 훑어보기, 되돌리기), `--queue` 판정 모드. 남은 것: 복사, 오른쪽 패널(요약·메모), 인라인 텍스트 편집, 키워드 칩 | 이슈 #12 (worker-3 인수) |
 
 - 회의 메모 보정의 "자료 → 용어 후보" 부분은 맥락 보정(`--context`, `notes --to-series`)이 맡는다. 대조는 `rec2md notes`가 근거 후보를 모으고 에이전트가 판단한다(정렬은 키워드·숫자·인명 겹침, 임베딩 없음).
 

@@ -36,3 +36,6 @@ src/rec2md/templates/ji/*.docx
 # 판정 사례·답(실데이터에서 만든 것)
 *.cases.json
 *.answers.json
+*.edits.json
+*.segments.orig.json
+*.memo.md
