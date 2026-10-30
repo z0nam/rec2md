@@ -173,8 +173,12 @@ def test_other_folder_with_same_name_is_not_skipped_as_done(folder, calls, tmp_p
     other.mkdir()
     (other / "a_meeting.mp3").write_bytes(b"")
     seen.clear()
-    with pytest.raises(SystemExit, match="출력 이름이 겹쳐"):
-        cmd_batch.main([str(other), "--out", str(out)])
+    LENGTHS["a_meeting.mp3"], old = 1234.0, LENGTHS["a_meeting.mp3"]  # 이름만 같고 다른 녹음
+    try:
+        with pytest.raises(SystemExit, match="출력 이름이 겹쳐"):
+            cmd_batch.main([str(other), "--out", str(out)])
+    finally:
+        LENGTHS["a_meeting.mp3"] = old
     assert seen == []  # 덮어쓰지도, 건너뛰지도(이미 처리) 않는다
 
 
@@ -203,3 +207,22 @@ def test_same_stem_from_previous_batch_is_a_clash(folder, calls, tmp_path):
         assert seen == []
     finally:
         del LENGTHS["a_meeting.wav"]
+
+
+def test_moved_source_folder_still_resumes(folder, calls, tmp_path):
+    """원본 폴더를 옮기거나 다른 경로로 붙어도(같은 파일명·같은 길이) 이어서 돈다 (리뷰 #28 3차)."""
+    seen, _ = calls
+    out = tmp_path / "out"
+    cmd_batch.main([str(folder), "--out", str(out)])
+    moved = tmp_path / "moved"
+    folder.rename(moved)
+    seen.clear()
+    cmd_batch.main([str(moved), "--out", str(out)])
+    assert seen == []  # done은 그대로 건너뜀
+    # 같은 이름이지만 길이가 다른 파일은 다른 원본 → 겹침
+    LENGTHS["a_meeting.mp3"], old = 999.0, LENGTHS["a_meeting.mp3"]
+    try:
+        with pytest.raises(SystemExit, match="상태 파일"):
+            cmd_batch.main([str(moved), "--out", str(out)])
+    finally:
+        LENGTHS["a_meeting.mp3"] = old

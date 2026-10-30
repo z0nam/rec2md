@@ -72,10 +72,26 @@ def _clashes(files: list[Path], state: dict) -> set[Path]:
     # 이 파일 것인지는 source 경로로, source가 없는 예전 기록은 파일명으로 판단한다
     for name, rec in state.items():
         for f in by_stem.get(Path(name).stem.casefold(), []):
-            src = rec.get("source") if isinstance(rec, dict) else None
-            if (src and src != str(f.resolve())) or (not src and name != f.name):
+            if not _same_source(f, name, rec if isinstance(rec, dict) else {}):
                 out.add(f)
     return out
+
+
+def _same_source(f: Path, name: str, rec: dict) -> bool:
+    """상태 기록이 이 파일 것인가. 파일명이 같으면 원본 경로가 달라도(폴더를 옮김, 외장 디스크가 다른 경로로
+    붙음) 길이가 같을 때 같은 원본으로 본다. 파일명이 다르면(회의.mp3 ↔ 회의.wav) 다른 원본."""
+    if name != f.name:
+        return False
+    src = rec.get("source")
+    if not src or src == str(f.resolve()):
+        return True
+    sec = rec.get("sec")
+    if sec is None:
+        return False
+    try:
+        return abs(audio.probe_duration(f) - float(sec)) < 0.5
+    except Exception:
+        return False
 
 
 def plan(files: list[Path], state: dict, min_sec: float) -> list[Item]:
@@ -168,4 +184,5 @@ def main(argv: list[str]) -> None:
     if failed:
         raise SystemExit(f"실패 {failed}개 — 같은 명령을 다시 실행하면 실패한 것만 다시 시도함 ({state_path})")
     if clashed:
-        raise SystemExit(f"출력 이름이 겹쳐 처리하지 않은 파일: {', '.join(clashed)} — 이름을 바꾸거나 --out을 따로 지정")
+        raise SystemExit(f"출력 이름이 겹쳐 처리하지 않은 파일: {', '.join(clashed)} — 이름을 바꾸거나 --out을 따로 지정. "
+                         f"같은 파일인데 겹침으로 나오면 상태 파일({state_path})에서 그 항목을 지우면 된다")
