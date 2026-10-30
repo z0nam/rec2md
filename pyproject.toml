@@ -15,7 +15,14 @@ diarize = [
 ]
 
 [dependency-groups]
-dev = ["rapidfuzz>=3.0"]  # scripts/compare.py
+dev = [
+    "pytest>=8.0",
+    "rapidfuzz>=3.0",
+]  # scripts/compare.py
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
 
 [project.scripts]
 rec2md = "rec2md.cli:main"
