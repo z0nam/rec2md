@@ -76,13 +76,19 @@ class Matcher:
         self.exact = {k for _, k, _ in keys}
         self.vocab = [(t, k, j, max_dist(k, j)) for t, k, j in keys]
 
-    def near(self, s: str) -> list[tuple[str, int]]:
-        """s와 가깝지만 같지 않은 용어 [(용어, 자모거리)], 가까운 순."""
+    def has_exact(self, s: str) -> bool:
+        # 맞는 용어가 그대로 들어 있거나 글자가 붙었을 뿐인 어절("3국제자유도시", "그핵심사업")은 고칠 게 없다
         k = _key(s)
-        if len(k) < 2 or k in self.exact:
-            return []
-        # 맞는 용어에 글자가 붙었을 뿐인 어절("3국제자유도시", "그핵심사업")은 고칠 게 없다
-        if any(e in k for e in self.exact):
+        return any(e in k for e in self.exact)
+
+    def near(self, s: str, raw: str | None = None) -> list[tuple[str, int]]:
+        """s와 가깝지만 같지 않은 용어 [(용어, 자모거리)], 가까운 순.
+
+        raw는 조사를 떼기 전 어절이다. 용어 자체가 조사꼴로 끝나면("전문가") 떼고 난 "전문"만 보고
+        후보로 올리게 되므로, 뗀 쪽과 원래 쪽 어느 하나라도 정확히 맞으면 후보가 아니다.
+        """
+        k = _key(s)
+        if len(k) < 2 or self.has_exact(k) or (raw is not None and self.has_exact(raw)):
             return []
         js = jamo(k)
         out = []
@@ -95,14 +101,20 @@ class Matcher:
         return sorted(out, key=lambda x: x[1])
 
 
-def _spans(text: str) -> list[str]:
-    """어절 1〜MAX_NGRAM개 묶음. 마지막 어절의 조사는 뗀다."""
+def _raw_spans(text: str) -> list[tuple[str, str]]:
+    """어절 1〜MAX_NGRAM개 묶음 [(조사 뗀 것, 원래 것)]."""
     toks = [t for t in re.split(r"\s+", text) if t]
     out = []
     for n in range(1, MAX_NGRAM + 1):
         for i in range(len(toks) - n + 1):
-            out.append(_strip_josa(_key("".join(toks[i:i + n]))))
+            raw = _key("".join(toks[i:i + n]))
+            out.append((_strip_josa(raw), raw))
     return out
+
+
+def _spans(text: str) -> list[str]:
+    """어절 1〜MAX_NGRAM개 묶음. 마지막 어절의 조사는 뗀다."""
+    return [sp for sp, _ in _raw_spans(text)]
 
 
 def find_candidates(t: Transcript, ctx: Context) -> list[dict]:
@@ -126,11 +138,11 @@ def find_candidates(t: Transcript, ctx: Context) -> list[dict]:
         for w, r in variants.items():
             if w and w in body:
                 add(w, [r], "용어집 오인식 매핑", s.start)
-        for sp in _spans(s.text):
-            for term, d in m.near(sp)[:3]:
+        for sp, raw in _raw_spans(s.text):
+            for term, d in m.near(sp, raw)[:3]:
                 add(sp, [term], f"용어 '{term}' 자모거리 {d}", s.start)
         for st, _en, p, text in s.low_conf or low_conf_spans(s.words):
-            near = [term for sp in _spans(text) for term, _ in m.near(sp)[:2]]
+            near = [term for sp, raw in _raw_spans(text) for term, _ in m.near(sp, raw)[:2]]
             if near or p < CAND_PROB or _strip_josa(_key(text)) in found:
                 add(text, near, f"낮은 확률 {p}", st, p)
         cands += found.values()

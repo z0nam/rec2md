@@ -81,6 +81,13 @@ def test_prompt_echo_filtered():
     assert kept == ["홍길동", "탐라데이터센터 예산은 얼마입니까"]
 
 
+def test_term_ending_in_josa_is_not_a_candidate():
+    # "전문가"의 "가"를 조사로 떼어 "전문"과 비교하면 맞게 적힌 용어가 후보로 오른다
+    ctx = Context(terms=["전문가"])
+    t = Transcript("x", 3, "local", "ko", [Segment(0, 2, "전문가 발표입니다", low_conf=[[0, 1, 0.1, "전문가"]])])
+    assert all(c["suggest"] == [] for c in find_candidates(t, ctx))
+
+
 def test_jamo_distance():
     assert jamo("한") == "ㅎㅏㄴ"
     assert edit_distance(jamo("홍길똥"), jamo("홍길동"), 2) == 1
