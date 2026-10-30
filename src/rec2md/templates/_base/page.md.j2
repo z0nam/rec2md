@@ -1,0 +1,20 @@
+{#- 기본 Markdown 양식. 문맥: title, rows, fields, content, content_md, values, m, t (docs/templates.md) -#}
+# {{ title }}
+
+| 항목 | 내용 |
+|---|---|
+{% for f, lines in fields if not f.block %}
+| {{ f.label }} | {{ lines | cell }} |
+{% endfor %}
+{% for f, lines in fields if f.block %}
+
+## {{ f.label }}
+
+{% if f.value == "content" %}
+{{ content_md }}
+{% else %}
+{% for x in lines %}
+- {{ x }}
+{% endfor %}
+{% endif %}
+{% endfor %}

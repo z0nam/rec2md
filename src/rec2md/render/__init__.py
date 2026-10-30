@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .segments import Transcript
+from ..segments import Transcript
 
 
 def fmt_ts(sec: float) -> str:

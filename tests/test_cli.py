@@ -10,7 +10,10 @@ def test_unimplemented_subcommand_voices():
     assert "아직 구현되지 않은 명령: voices" in str(exc_info.value)
 
 
-def test_unimplemented_subcommand_render():
+def test_unimplemented_subcommand(monkeypatch):
+    # 예약 명령은 하나씩 구현되므로 실제 이름 대신 가짜 예약 명령으로 확인한다
+    import rec2md.cli
+    monkeypatch.setattr(rec2md.cli, "SUBCOMMANDS", rec2md.cli.SUBCOMMANDS | {"nosuchcmd"})
     with pytest.raises(SystemExit) as exc_info:
-        main(["render"])
-    assert "아직 구현되지 않은 명령: render" in str(exc_info.value)
+        main(["nosuchcmd"])
+    assert "아직 구현되지 않은 명령: nosuchcmd" in str(exc_info.value)
