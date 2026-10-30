@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import threading
 import urllib.error
@@ -12,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from rec2md import cmd_review, speakers
-from rec2md.review import Queue, Session, apply_edits, answers_path, targets
+from rec2md.review import MemoConflict, Queue, Session, apply_edits, answers_path, summary_file, targets
 from rec2md.segments import Segment, Transcript
 
 FIX = Path(__file__).parent / "fixtures"
@@ -226,7 +227,9 @@ def test_parse_range():
 def test_api_edit_undo(server, seg_file):
     base, _ = server
     st, page = get(base + "/")[0], get(base + "/")[2]
-    assert st == 200 and b"<audio" in page and b"http" not in page.split(b"<script>")[1]   # 외부 리소스 없음
+    assert st == 200 and b"<audio" in page
+    # 외부 리소스 없음 (요약 md의 링크를 처리하는 정규식에는 http가 나오므로 불러오는 자리만 본다)
+    assert not re.search(rb"""(src|href)\s*=\s*["']?https?:|@import|url\(\s*["']?https?:|fetch\(\s*["']https?:""", page)
     st, state = post(base + "/api/edit", edit("all", 0, "화자1", {"name": "홍길동"}))
     assert st == 200 and state["edits"] == 1 and state["segments"][0]["name"] == "홍길동"
     st, err = post(base + "/api/edit", edit("one", 99, "화자1", "화자2"))
@@ -278,3 +281,141 @@ def test_reopen_without_external_change_keeps_log(seg_file):
     Session(seg_file).add(edit("one", 1, "화자2", "화자1"))
     s = Session(seg_file)
     assert s.notice == "" and len(s.edits) == 1
+
+
+# ---- 문장 편집 (set_text) ----
+
+def text_edit(seg, frm, to):
+    return {"op": "set_text", "seg": seg, "from": frm, "to": to}
+
+
+def test_set_text_checks_and_normalizes():
+    t = make()
+    t.segments[1].low_conf = [[10.0, 11.0, 0.1, "문장"]]
+    out = apply_edits(t, [text_edit(1, "문장1", "  고친\n문장  ")])
+    assert out.segments[1].text == "고친 문장" and out.segments[1].low_conf == []
+    with pytest.raises(ValueError, match="다름"):   # 화면이 본 문장과 지금 문장이 다르면 덮지 않는다
+        apply_edits(t, [text_edit(1, "옛 문장", "새 문장")])
+    with pytest.raises(ValueError):
+        apply_edits(t, [text_edit(9, "x", "y")])
+    with pytest.raises(TypeError):
+        apply_edits(t, [text_edit(1, "문장1", 3)])
+
+
+def test_text_and_speaker_edits_replay_identically(seg_file):
+    """화자 변경과 문장 편집을 섞어도, 한 건씩 저장한 결과 = 원본에 로그 전체를 다시 적용한 결과."""
+    s = Session(seg_file)
+    s.add(edit("all", 0, "화자1", {"name": "홍길동"}))
+    s.add(text_edit(2, "문장2", "홍길동의 고친 말"))
+    s.add(edit("one", 2, "화자1", {"name": "김철수"}))      # 고친 문장의 화자를 다시 바꿈
+    s.add(text_edit(2, "홍길동의 고친 말", "두 번 고친 말"))
+    s.add(edit("after", 3, "화자2", "화자3"))
+    on_disk = Transcript.from_json(seg_file)
+    replay = apply_edits(Transcript.from_json(s.orig), json.loads(s.edits_path.read_text(encoding="utf-8")))
+    for t in (on_disk, replay, Session(seg_file).current):   # 다시 열어도 같다
+        assert [(x.text, x.speaker) for x in t.segments] == [(x.text, x.speaker) for x in s.current.segments]
+        assert t.meta["speaker_names"] == s.current.meta["speaker_names"]
+    assert s.current.segments[2].text == "두 번 고친 말" and s.current.segments[2].speaker == "화자4"
+    st = s.state()
+    assert [x["edited"] for x in st["segments"]] == [False, False, True, False, False, False]
+    assert "두 번 고친 말" in seg_file.with_name("meet.raw.md").read_text(encoding="utf-8")
+
+    s.undo()   # 화자 변경만 되돌리고 문장은 그대로
+    assert s.current.segments[3].speaker == "화자2" and s.current.segments[2].text == "두 번 고친 말"
+    s.undo()   # 두 번째 문장 편집 되돌림
+    assert s.current.segments[2].text == "홍길동의 고친 말" and s.current.segments[2].speaker == "화자4"
+
+
+def test_noop_edit_not_logged(seg_file):
+    s = Session(seg_file)
+    s.add(text_edit(1, "문장1", " 문장1 "))
+    s.add(edit("one", 0, "화자1", "화자1"))
+    assert s.edits == [] and not s.orig.exists()
+
+
+# ---- 복사, 요약·메모, 키워드 ----
+
+def test_copy_is_clova_txt_with_names(seg_file):
+    from rec2md.clova_txt import parse
+    s = Session(seg_file)
+    s.add(edit("all", 0, "화자1", {"name": "홍길동"}))
+    txt = s.transcript_txt()
+    assert txt.splitlines()[0] == "meet" and "홍길동 00:00" in txt
+    p = seg_file.with_name("copy.txt")
+    p.write_text(txt, encoding="utf-8")
+    t = parse(p)
+    assert [x.text for x in t.segments][:2] == ["문장0", "문장1"]
+
+
+def test_summary_file_choice(tmp_path, seg_file):
+    assert summary_file(seg_file, "meet") is None
+    (tmp_path / "meet-1차.요약.md").write_text("b", encoding="utf-8")
+    (tmp_path / "other.요약.md").write_text("x", encoding="utf-8")
+    assert summary_file(seg_file, "meet").name == "meet-1차.요약.md"
+    (tmp_path / "meet.녹취록.md").write_text("a", encoding="utf-8")
+    assert summary_file(seg_file, "meet").name == "meet.녹취록.md"
+
+
+def test_memo_save_and_conflict(seg_file):
+    s = Session(seg_file)
+    assert s.panel() == {"summary": None, "memo": "", "memo_name": "meet.memo.md"}
+    s.save_memo("", "")
+    assert not s.memo_path.exists()               # 빈 메모로 파일을 만들지 않음
+    s.save_memo("- 결정: 예산 3억\n", "")
+    assert s.memo_path.read_text(encoding="utf-8") == "- 결정: 예산 3억\n"
+    s.memo_path.write_text("다른 편집기에서 고침", encoding="utf-8")
+    with pytest.raises(MemoConflict):
+        s.save_memo("화면에서 쓴 것", "- 결정: 예산 3억\n")
+    assert s.memo() == "다른 편집기에서 고침"
+
+
+def test_memo_unload_save_accepts_pending_base(seg_file):
+    """닫을 때의 저장은 진행 중이던 저장이 먼저 끝나도, 나중에 끝나도 받아들여진다."""
+    s = Session(seg_file)
+    s.save_memo("가", "")
+    s.save_memo("가나", "가")                       # 진행 중이던 저장이 먼저 끝남
+    s.save_memo("가나다", ["가", "가나"])           # 닫을 때의 저장
+    assert s.memo() == "가나다"
+    s2 = Session(seg_file.with_name("meet.segments.json"))
+    s2.memo_path.write_text("가", encoding="utf-8")
+    s2.save_memo("가나다", ["가", "가나"])          # 닫을 때의 저장이 먼저 도착
+    with pytest.raises(MemoConflict):
+        s2.save_memo("가나", "가")                  # 늦게 온 옛 저장은 새 글을 덮지 않음
+    assert s2.memo() == "가나다"
+
+
+def test_keywords_from_corrections_and_glossary(tmp_path, seg_file, monkeypatch):
+    s = Session(seg_file)
+    assert s.keywords() == []
+    seg_file.with_name("meet.corrections.json").write_text(json.dumps({"series": "운영위", "candidates": [
+        {"text": "문장 1", "suggest": ["문장일"]},
+        {"text": "문장 1", "suggest": ["문장일"]},        # 같은 표기는 한 번
+        {"text": "확률만낮음", "suggest": []},            # 제안 없는 후보는 칩으로 안 냄
+    ]}, ensure_ascii=False), encoding="utf-8")
+    root = tmp_path / "series"
+    (root / "운영위").mkdir(parents=True)
+    (root / "운영위" / "glossary.txt").write_text("# 주석\n문장\n오식 => 정식\n", encoding="utf-8")
+    monkeypatch.setenv("REC2MD_SERIES_DIR", str(root))
+    assert s.keywords() == [{"text": "문장 1", "kind": "fix", "hint": "문장일"},
+                            {"text": "문장", "kind": "term", "hint": ""},
+                            {"text": "정식", "kind": "term", "hint": ""}]
+    assert [k["text"] for k in s.keywords("../etc")] == ["문장 1"]   # 시리즈 이름에 경로 금지
+
+
+def test_api_copy_panel_memo(server, seg_file):
+    base, _ = server
+    seg_file.with_name("meet.녹취록.md").write_text("# 요약\n- 03:15 결정 <b>", encoding="utf-8")
+    st, _, body = get(base + "/api/copy")
+    assert st == 200 and json.loads(body)["text"].startswith("meet\n")
+    st, _, body = get(base + "/api/panel")
+    assert json.loads(body)["summary"]["name"] == "meet.녹취록.md"
+    st, r = post(base + "/api/memo", {"text": "메모", "base": ""})
+    assert st == 200 and r["memo"] == "메모"
+    st, r = post(base + "/api/memo", {"text": "덮어쓰기", "base": ""})
+    assert st == 409 and "바뀜" in r["error"]
+    st, _, body = get(base + "/api/keywords")
+    assert st == 200 and json.loads(body) == {"keywords": []}
+    st, state = post(base + "/api/edit", text_edit(1, "문장1", "고침"))
+    assert st == 200 and state["segments"][1]["edited"] is True
+    st, _ = post(base + "/api/edit", text_edit(1, "문장1", "또 고침"))   # 낡은 from
+    assert st == 400

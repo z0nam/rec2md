@@ -18,7 +18,7 @@
     font: 15px/1.6 -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif; }
   button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
   header { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line);
-    padding: 14px 20px 10px; display: flex; gap: 12px; align-items: flex-end; justify-content: space-between; }
+    padding: 14px 20px 10px; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; justify-content: space-between; }
   header h1 { font-size: 18px; margin: 0; word-break: break-all; }
   header .sub { color: var(--muted); font-size: 13px; }
   .tools { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
@@ -39,6 +39,58 @@
   .who .name:hover { background: var(--soft); text-decoration: underline; }
   .who .ts { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
   .text { grid-column: 2; cursor: pointer; white-space: pre-wrap; word-break: keep-all; overflow-wrap: anywhere; }
+  .text mark { background: color-mix(in srgb, #f5c542 55%, transparent); color: inherit; border-radius: 3px; }
+  body.editing .text { cursor: text; border-radius: 6px; padding: 0 4px; margin: 0 -4px; }
+  body.editing .text:hover { background: var(--soft); }
+  .text:focus { outline: 2px solid var(--accent); background: var(--bg); }
+  .seg.edited .who::after { content: "수정됨"; color: var(--muted); font-size: 12px; border: 1px solid var(--line);
+    border-radius: 6px; padding: 0 5px; }
+  .seg.kw { box-shadow: inset 3px 0 0 #f5c542; }
+  .btn.on { background: var(--hl); border-color: var(--accent); }
+
+  /* 키워드 칩 */
+  .chips { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .chips[hidden] { display: none; }
+  .chip { border: 1px solid var(--line); border-radius: 999px; padding: 1px 10px; font-size: 13px; }
+  .chip:hover { background: var(--soft); }
+  .chip .n { color: var(--muted); margin-left: 4px; font-size: 12px; }
+  .chip.fix { border-style: dashed; border-color: var(--warn); }
+  .chip.on { background: var(--hl); border-color: var(--accent); }
+
+  /* 오른쪽 패널 */
+  .layout { --top: 64px; }
+  aside.panel { display: none; flex-direction: column; background: var(--bg); border-left: 1px solid var(--line); }
+  aside.panel.open { display: flex; position: fixed; right: 0; top: 0; bottom: 74px; width: min(420px, 100vw); z-index: 8;
+    box-shadow: var(--shadow); }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); padding: 8px 12px 0; }
+  .tabs button { padding: 6px 12px; border-bottom: 2px solid transparent; color: var(--muted); }
+  .tabs button.on { color: var(--fg); border-color: var(--accent); font-weight: 600; }
+  .tabs .x { margin-left: auto; }
+  .pbody { flex: 1; overflow: auto; padding: 12px 16px; min-height: 0; }
+  .pbody[hidden] { display: none; }
+  #pmemo:not([hidden]) { display: flex; flex-direction: column; gap: 6px; }
+  #memo { flex: 1; width: 100%; resize: none; border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+    background: var(--bg); color: var(--fg); font: 14px/1.6 inherit; font-family: inherit; }
+  .mstat { color: var(--muted); font-size: 12px; }
+  .mstat.err { color: var(--warn); }
+  .md { font-size: 14px; }
+  .md h1, .md h2, .md h3, .md h4 { line-height: 1.35; margin: 1em 0 .4em; }
+  .md h1 { font-size: 18px; } .md h2 { font-size: 16px; } .md h3, .md h4 { font-size: 15px; }
+  .md p { margin: .5em 0; } .md ul, .md ol { padding-left: 1.4em; margin: .4em 0; }
+  .md code { background: var(--soft); border-radius: 4px; padding: 0 3px; font-size: 13px; }
+  .md pre { background: var(--soft); border-radius: 8px; padding: 8px 10px; overflow: auto; }
+  .md pre code { background: none; padding: 0; }
+  .md blockquote { margin: .5em 0; padding-left: 10px; border-left: 3px solid var(--line); color: var(--muted); }
+  .md table { border-collapse: collapse; font-size: 13px; margin: .5em 0; }
+  .md th, .md td { border: 1px solid var(--line); padding: 3px 6px; vertical-align: top; }
+  .md hr { border: 0; border-top: 1px solid var(--line); }
+  .md .tsl { color: var(--accent); font-variant-numeric: tabular-nums; text-decoration: underline; padding: 0; }
+  @media (min-width: 1100px) {
+    .layout.has-panel { display: grid; grid-template-columns: minmax(0, 1fr) 380px; }
+    .layout.has-panel aside.panel { display: flex; position: sticky; top: var(--top); height: calc(100vh - var(--top) - 74px);
+      box-shadow: none; width: auto; z-index: 1; }
+    .layout.has-panel aside.panel .x, #panelbtn { display: none; }
+  }
   .empty { color: var(--muted); padding: 40px 0; text-align: center; }
 
   /* 화자 변경 팝오버 */
@@ -116,10 +168,28 @@
   </div>
   <div class="tools">
     <span class="status" id="status"></span>
+    <button class="btn" id="edit" title="문장 고치기: 켜면 문장을 눌러 바로 고침. Enter 저장, Esc 취소" hidden>편집</button>
+    <button class="btn" id="copy" title="전체 녹취록을 클로바 txt 형식으로 복사" hidden>복사</button>
+    <button class="btn" id="panelbtn" title="요약·메모" hidden>요약·메모</button>
     <button class="btn" id="undo" title="되돌리기 (⌘Z)" hidden>되돌리기</button>
   </div>
+  <div class="chips" id="chips" hidden></div>
 </header>
+<div class="layout" id="layout">
 <main id="main"></main>
+<aside class="panel" id="panel" aria-label="요약·메모">
+  <div class="tabs">
+    <button data-tab="sum" id="tabsum">요약</button>
+    <button data-tab="memo" id="tabmemo">메모</button>
+    <button class="x" id="panelclose" title="닫기">✕</button>
+  </div>
+  <div class="pbody md" id="psum"></div>
+  <div class="pbody" id="pmemo" hidden>
+    <textarea id="memo" placeholder="회의 메모. 쓰는 대로 저장됨" spellcheck="false"></textarea>
+    <div class="mstat" id="mstat"></div>
+  </div>
+</aside>
+</div>
 <div class="browsebar" id="browsebar">
   <span id="browselabel"></span>
   <button class="btn" id="bprev" title="이전 구간">◀</button>
@@ -156,6 +226,9 @@ let browse = null;       // {label, pos}
 let stopAt = null;       // 훑어보기·판정: 이 시각에 멈춤
 let caseIdx = 0;
 let pop = null;
+let editing = false;     // 문장 편집 모드
+let kws = [];            // 키워드 칩 후보 {text, kind, hint}
+let kwOn = null;         // 누른 칩 {text, pos}
 
 function fmt(sec) {
   sec = Math.max(0, Math.floor(sec || 0));
@@ -283,14 +356,18 @@ function renderTranscript() {
   const frag = document.createDocumentFragment();
   for (const s of S.segments) {
     const name = s.name || s.speaker || "";
-    frag.append(el("div", { class: "seg" + (s.i === curIdx ? " cur" : ""), "data-i": s.i },
+    const text = el("div", { class: "text", onclick: () => { if (!editing) playSeg(s.i); } });
+    if (editing) editable(text, s.i);
+    frag.append(el("div", { class: "seg" + (s.i === curIdx ? " cur" : "") + (s.edited ? " edited" : ""), "data-i": s.i },
       avatar(s.speaker, name),
       el("div", { class: "who" },
         el("button", { class: "name", title: "화자 변경", onclick: (ev) => openPop(s, ev.currentTarget) }, name || "화자 없음"),
-        el("button", { class: "ts", onclick: () => playSeg(s.i) }, fmt(s.start))),
-      el("div", { class: "text", onclick: () => playSeg(s.i) }, s.text)));
+        el("button", { class: "ts", title: "여기부터 재생", onclick: () => playSeg(s.i) }, fmt(s.start))),
+      text));
   }
   main.append(frag);
+  renderChips();
+  applyKw();
   if (browse) showBrowse(); else clearBrowse();
   $("sub").textContent = [S.date, S.duration ? fmtLen(S.duration) : "", `${S.speakers.length}명`].filter(Boolean).join(" · ");
   $("undo").hidden = false;
@@ -300,6 +377,270 @@ function playSeg(i) {
   autoScroll = true;
   seek(S.segments[i].start, true);
 }
+
+// ---------- 문장 편집 ----------
+function norm(t) { return String(t || "").split(/\s+/).filter(Boolean).join(" "); }
+function editable(e, i) {
+  e.contentEditable = "plaintext-only";
+  if (e.contentEditable !== "plaintext-only") e.contentEditable = "true";   // plaintext-only를 모르는 브라우저
+  e.spellcheck = false;
+  e.addEventListener("focus", () => { autoScroll = false; e.textContent = S.segments[i].text; });
+  e.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); e.blur(); }
+    else if (ev.key === "Escape") { ev.preventDefault(); e.textContent = S.segments[i].text; e.blur(); }
+  });
+  e.addEventListener("blur", () => commitText(i, e));
+}
+async function commitText(i, e) {
+  const cur = S.segments[i], to = norm(e.textContent);
+  if (to === norm(cur.text)) { fillText(e, i); return; }
+  try {
+    S = await api("/api/edit", { op: "set_text", seg: i, from: cur.text, to });
+    setStatus("저장됨");
+    const row = segEl(i);
+    if (row) row.classList.toggle("edited", !!S.segments[i].edited);
+    $("undo").disabled = !S.edits;
+    renderChips();
+    applyKw();
+  } catch (err) { setStatus("저장 실패: " + err.message, true); }
+  // 편집 모드를 끄며 다시 그렸으면 e는 이미 화면에 없다. 지금 화면의 그 문장을 채운다
+  const live = segEl(i) && segEl(i).querySelector(".text");
+  for (const x of new Set([e, live])) if (x) fillText(x, i);
+}
+$("edit").onclick = () => {
+  editing = !editing;
+  document.body.classList.toggle("editing", editing);
+  $("edit").classList.toggle("on", editing);
+  $("edit").textContent = editing ? "편집 끝" : "편집";
+  if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  renderTranscript();
+};
+
+// ---------- 복사 ----------
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return; } catch (e) { /* 아래 방법으로 */ }
+  const ta = el("textarea", { style: "position:fixed;left:-9999px;top:0" });
+  ta.value = text;
+  document.body.append(ta);
+  ta.select();
+  const ok = document.execCommand("copy");
+  ta.remove();
+  if (!ok) throw new Error("브라우저가 클립보드 쓰기를 막음");
+}
+$("copy").onclick = async () => {
+  try {
+    const { text } = await api("/api/copy");
+    await copyText(text);
+    setStatus(`복사됨 (클로바 txt, ${text.split("\n").length}줄)`);
+  } catch (e) { setStatus("복사 실패: " + e.message, true); }
+};
+
+// ---------- 키워드 칩 ----------
+function kwSegs(text) {
+  const k = text.replace(/\s+/g, "");
+  return k ? S.segments.filter((x) => x.text.replace(/\s+/g, "").includes(k)).map((x) => x.i) : [];
+}
+function renderChips() {
+  const box = $("chips");
+  box.replaceChildren();
+  const items = kws.map((k) => ({ ...k, segs: kwSegs(k.text) })).filter((k) => k.segs.length);
+  // 고칠 후보 먼저, 그다음 자주 나온 용어. 칩이 화면을 덮지 않게 24개까지
+  items.sort((a, b) => (a.kind === b.kind ? b.segs.length - a.segs.length : a.kind === "fix" ? -1 : 1));
+  for (const k of items.slice(0, 24)) {
+    const on = kwOn && kwOn.text === k.text;
+    const tip = k.kind === "fix" ? `고칠 후보 → ${k.hint}` : "용어집";
+    box.append(el("button", { class: `chip ${k.kind}` + (on ? " on" : ""), title: tip + " · 누를 때마다 다음 구간",
+      onclick: () => kwGo(k.text) }, k.text,
+      el("span", { class: "n" }, on ? `${kwOn.pos + 1}/${k.segs.length}` : String(k.segs.length))));
+  }
+  if (kwOn) box.append(el("button", { class: "chip", title: "강조 끄기 (Esc)", onclick: clearKw }, "✕"));
+  box.hidden = !box.childElementCount;
+  fitTop();
+}
+function fillText(e, i) {
+  if (document.activeElement === e) return;   // 고치는 중인 문장은 건드리지 않는다(쓰던 글자·커서 보존)
+  const text = S.segments[i].text;
+  const k = kwOn && kwOn.text;
+  if (!k || !text.includes(k)) { e.textContent = text; return; }
+  e.replaceChildren();
+  let at = 0, j;
+  while ((j = text.indexOf(k, at)) >= 0) {
+    e.append(text.slice(at, j), el("mark", {}, k));
+    at = j + k.length;
+  }
+  e.append(text.slice(at));
+}
+function applyKw() {
+  const hit = new Set(kwOn ? kwSegs(kwOn.text) : []);
+  document.querySelectorAll(".seg").forEach((row) => {
+    const i = Number(row.dataset.i);
+    row.classList.toggle("kw", hit.has(i));
+    fillText(row.querySelector(".text"), i);
+  });
+}
+function kwGo(text) {
+  const segs = kwSegs(text);
+  if (!segs.length) return;
+  kwOn = kwOn && kwOn.text === text ? { text, pos: (kwOn.pos + 1) % segs.length } : { text, pos: 0 };
+  renderChips();
+  applyKw();
+  const i = segs[kwOn.pos];
+  autoScroll = false;
+  segEl(i).scrollIntoView({ block: "center", behavior: "smooth" });
+  seek(S.segments[i].start, !audio.paused);
+}
+function clearKw() { kwOn = null; renderChips(); applyKw(); }
+
+// ---------- 오른쪽 패널: 요약·메모 ----------
+function esc(t) {
+  return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function tsSec(ts) { return ts.split(":").reduce((a, x) => a * 60 + Number(x), 0); }
+// 인라인 md. 사용자 글자는 전부 esc()를 거치고, 그 위에 정해진 태그만 덧붙인다
+function mdInline(t) {
+  return t.split(/(`[^`]+`)/).map((part) => {
+    if (part.length > 1 && part.startsWith("`") && part.endsWith("`")) return `<code>${esc(part.slice(1, -1))}</code>`;
+    let h = esc(part);
+    h = h.replace(/(^|[^\d:])((?:\d{1,2}:)?\d{1,2}:\d{2})(?![\d:])/g,
+      // 녹음 길이를 넘는 값(예: 회의 시각 "14:00")은 시각으로 보고 그대로 둔다
+      (m, pre, ts) => (S && S.duration && tsSec(ts) > S.duration + 1) ? m
+        : `${pre}<button class="tsl" data-t="${tsSec(ts)}">${ts}</button>`);
+    h = h.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    h = h.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/(^|[^*])\*([^*\s][^*]*?)\*(?!\*)/g, "$1<em>$2</em>");
+    return h;
+  }).join("");
+}
+function mdToHtml(src) {
+  const lines = src.replace(/\r\n?/g, "\n").split("\n");
+  const out = [];
+  let para = [], lists = [];   // lists: [{tag, indent}]
+  const flushPara = () => { if (para.length) { out.push(`<p>${mdInline(para.join(" "))}</p>`); para = []; } };
+  const closeLists = (indent = -1) => {
+    while (lists.length && lists[lists.length - 1].indent > indent) out.push(`</li></${lists.pop().tag}>`);
+  };
+  const cells = (row) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    let m;
+    if (/^\s*```/.test(line)) {
+      flushPara(); closeLists();
+      const code = [];
+      while (++i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i]);
+      out.push(`<pre><code>${esc(code.join("\n"))}</code></pre>`);
+    } else if (!line.trim()) {
+      flushPara();
+      if (!/^\s*([-*+]|\d+[.)])\s/.test(lines[i + 1] || "")) closeLists();
+    } else if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) {
+      flushPara(); closeLists();
+      const n = Math.min(m[1].length + 1, 4);   // 패널은 좁으므로 # 하나도 h2 크기부터
+      out.push(`<h${n}>${mdInline(m[2].replace(/\s#+\s*$/, ""))}</h${n}>`);
+    } else if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      flushPara(); closeLists(); out.push("<hr>");
+    } else if ((m = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(line))) {
+      flushPara();
+      const indent = m[1].replace(/\t/g, "    ").length, tag = /\d/.test(m[2]) ? "ol" : "ul";
+      closeLists(indent);
+      const top = lists[lists.length - 1];
+      if (top && top.indent === indent) {
+        if (top.tag !== tag) { out.push(`</li></${lists.pop().tag}><${tag}><li>`); lists.push({ tag, indent }); }
+        else out.push("</li><li>");
+      } else { out.push(`<${tag}><li>`); lists.push({ tag, indent }); }
+      out.push(mdInline(m[3]));
+    } else if (/^\s*>/.test(line)) {
+      flushPara(); closeLists();
+      const q = [];
+      for (; i < lines.length && /^\s*>/.test(lines[i]); i++) q.push(lines[i].replace(/^\s*>\s?/, ""));
+      i--;
+      out.push(`<blockquote>${mdInline(q.join(" "))}</blockquote>`);
+    } else if (/^\s*\|/.test(line) && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1] || "")) {
+      flushPara(); closeLists();
+      const head = cells(line);
+      i++;
+      const rows = [];
+      while (i + 1 < lines.length && /^\s*\|/.test(lines[i + 1])) rows.push(cells(lines[++i]));
+      out.push("<table><thead><tr>" + head.map((c) => `<th>${mdInline(c)}</th>`).join("") + "</tr></thead><tbody>"
+        + rows.map((r) => "<tr>" + r.map((c) => `<td>${mdInline(c)}</td>`).join("") + "</tr>").join("") + "</tbody></table>");
+    } else if (lists.length && /^\s+\S/.test(line)) {
+      out.push(" " + mdInline(line.trim()));   // 목록 항목이 다음 줄로 이어짐
+    } else {
+      closeLists();
+      para.push(line.trim());
+    }
+  }
+  flushPara(); closeLists();
+  return out.join("");
+}
+$("psum").addEventListener("click", (ev) => {
+  const b = ev.target instanceof Element && ev.target.closest(".tsl");
+  if (b) { autoScroll = true; seek(Number(b.dataset.t), true); }
+});
+
+let memoBase = "", memoTimer = null, memoBusy = null, memoBroken = false;
+let memoSending = null;   // 저장 중인 글. 성공하면 다음 base가 된다
+function tab(name) {
+  $("tabsum").classList.toggle("on", name === "sum");
+  $("tabmemo").classList.toggle("on", name === "memo");
+  $("psum").hidden = name !== "sum";
+  $("pmemo").hidden = name !== "memo";
+}
+$("tabsum").onclick = () => tab("sum");
+$("tabmemo").onclick = () => tab("memo");
+$("panelbtn").onclick = () => $("panel").classList.toggle("open");
+$("panelclose").onclick = () => $("panel").classList.remove("open");
+async function loadPanel() {
+  const P = await api("/api/panel");
+  if (P.summary) {
+    $("psum").innerHTML = `<div class="mstat">${esc(P.summary.name)} (읽기 전용)</div>` + mdToHtml(P.summary.text);
+  } else {
+    $("psum").innerHTML = '<div class="mstat">요약 없음 — 같은 폴더에 &lt;이름&gt;.녹취록.md 또는 &lt;이름&gt;.요약.md가 생기면 다시 열 때 보임</div>';
+  }
+  memoBase = P.memo;
+  $("memo").value = P.memo;
+  $("mstat").textContent = P.memo_name;
+  $("mstat").dataset.name = P.memo_name;
+  tab(P.summary ? "sum" : "memo");
+}
+async function saveMemo() {
+  clearTimeout(memoTimer);
+  memoTimer = null;
+  if (memoBroken) return;
+  if (memoBusy) { await memoBusy; return saveMemo(); }   // 저장은 한 번에 하나씩, 순서대로
+  const text = $("memo").value;
+  if (text === memoBase) return;
+  memoSending = text;
+  memoBusy = (async () => {
+    try {
+      await api("/api/memo", { text, base: memoBase });
+      memoBase = text;
+      $("mstat").className = "mstat";
+      $("mstat").textContent = `저장됨 · ${$("mstat").dataset.name}`;
+    } catch (e) {
+      memoBroken = /바뀜/.test(e.message);
+      $("mstat").className = "mstat err";
+      $("mstat").textContent = "메모 저장 실패: " + e.message;
+    }
+  })();
+  await memoBusy;
+  memoBusy = null;
+  memoSending = null;
+}
+$("memo").addEventListener("input", () => {
+  $("mstat").className = "mstat";
+  $("mstat").textContent = "쓰는 중…";
+  clearTimeout(memoTimer);
+  memoTimer = setTimeout(saveMemo, 800);
+});
+$("memo").addEventListener("blur", saveMemo);
+window.addEventListener("pagehide", () => {
+  const text = $("memo").value;
+  if (!memoBroken && S && S.mode === "transcript" && text !== memoBase) {
+    fetch("/api/memo", { method: "POST", keepalive: true, headers: { "Content-Type": "application/json" },
+      // 저장이 아직 진행 중이면 그 저장이 먼저 끝나든 나중에 끝나든 받아들여지도록 두 base를 다 보낸다
+      body: JSON.stringify({ text, base: memoSending === null ? memoBase : [memoBase, memoSending] }) });
+  }
+});
+function fitTop() { $("layout").style.setProperty("--top", document.querySelector("header").offsetHeight + "px"); }
+window.addEventListener("resize", fitTop);
 
 // ---------- 화자 변경 팝오버 ----------
 function closePop() { if (pop) { pop.remove(); pop = null; } }
@@ -479,13 +820,13 @@ async function answer(a) {
 
 // ---------- 단축키 ----------
 document.addEventListener("keydown", (ev) => {
-  const typing = ev.target instanceof Element && ev.target.closest("input, textarea");
+  const typing = ev.target instanceof Element && ev.target.closest("input, textarea, [contenteditable]");
   if (typing) return;
   if (ev.metaKey || ev.ctrlKey) {   // ⌘Z / Ctrl+Z만 받고 나머지 조합키는 브라우저에 맡긴다
     if (ev.key === "z" && S && S.mode === "transcript") { ev.preventDefault(); $("undo").click(); }
     return;
   }
-  if (ev.key === "Escape") { closePop(); return; }
+  if (ev.key === "Escape") { if (pop) closePop(); else if (kwOn) clearKw(); return; }
   if (ev.key === " ") { ev.preventDefault(); togglePlay(); return; }
   if (ev.key === "ArrowLeft") { ev.preventDefault(); seek(audio.currentTime - 5, !audio.paused); return; }
   if (ev.key === "ArrowRight") { ev.preventDefault(); seek(audio.currentTime + 5, !audio.paused); return; }
@@ -519,7 +860,11 @@ document.addEventListener("keydown", (ev) => {
   if (S.notice) setStatus(S.notice, true);
   $("dur").textContent = fmt(S.duration || 0);
   if (S.mode === "transcript") {
+    for (const b of ["edit", "copy", "panelbtn"]) $(b).hidden = false;
+    $("layout").classList.add("has-panel");
     renderTranscript();
+    loadPanel().catch((e) => setStatus("요약·메모 불러오기 실패: " + e.message, true));
+    api("/api/keywords").then((r) => { kws = r.keywords || []; renderChips(); applyKw(); }).catch(() => {});
   } else {
     // 이어서 하기: 처음으로 답하지 않은 사례부터
     const first = S.cases.findIndex((c) => !S.answers[c.id]);

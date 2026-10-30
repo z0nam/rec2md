@@ -44,7 +44,7 @@ uv tool install --editable '.[diarize,render,export,office]'
 | `rec2md render --kind transcript ...` | segments.json → 클로바노트식 녹취록 (txt·md·html) | 동작 |
 | `rec2md voices ...` | 목소리 등록, 새 녹취에 실명 자동 태깅 | 동작 |
 | `rec2md batch <폴더>` | 폴더 일괄 전사, `--dry-run`(길이·추정 말소리 길이·예상 시간), 중단 후 이어서 | 동작 |
-| `rec2md review <segments.json>` | 문장 클릭 재생 + 화자 고치기 (이 맥에서만 열리는 웹 화면) | 동작 |
+| `rec2md review <segments.json>` | 문장 클릭 재생 + 화자·문장 고치기, 복사, 요약·메모 (이 맥에서만 열리는 웹 화면) | 동작 |
 | `rec2md review --queue <cases.json>` | 사례를 하나씩 듣고 판정 → `answers.json` (평가 정답) | 동작 |
 
 ### 전사
@@ -140,10 +140,10 @@ rec2md notes meeting.segments.json 메모.docx [--series 정례회의] [--to-ser
 - 무엇이 틀렸는지 판단하고 보정본(`메모.보정.md`, 바꾼 줄마다 `[타임스탬프]` 근거)을 쓰는 것은 스킬의 에이전트가 한다. 원본 메모는 그대로 둔다.
 - `--to-series`는 메모를 시리즈 자료로 넣어 다음 전사의 용어 후보로 쓴다.
 
-### 검토 화면 (클릭 재생, 화자 고치기, 판정)
+### 검토 화면 (클릭 재생, 화자·문장 고치기, 판정)
 
 ```sh
-rec2md review meeting.segments.json [--audio meeting.m4a]     # 브라우저가 열린다. Ctrl-C로 끝냄
+rec2md review meeting.segments.json [--audio meeting.m4a] [--series 정례회의]   # 브라우저가 열린다. Ctrl-C로 끝냄
 rec2md review --queue meeting.cases.json                       # 판정 모드
 ```
 
@@ -152,7 +152,11 @@ rec2md review --queue meeting.cases.json                       # 판정 모드
 - 127.0.0.1에만 뜨고 외부로 나가는 것이 없다(페이지·스크립트 모두 내장).
 - 문장을 누르면 그 시점부터 재생. 아래 재생 바: 배속, ±5초, Space 재생/정지, ←/→ 5초, ↑/↓ 이전·다음 문장. 스크롤해서 재생 위치를 벗어나면 "재생 위치로 이동".
 - 화자 이름을 누르면 "화자 변경": 기존 화자 고르기 또는 이름 입력, 범위 **이 구간만 / 이 구간부터 / 전체**. 범위마다 바뀔 구간 수와 시간을 미리 보여 준다. 범위를 넓게 바꾸면 "이 화자 구간 훑어보기"로 그 화자 구간만 차례로 들어 보고 섞인 사람을 바로잡는다. ⌘Z 되돌리기.
-- 바꿀 때마다 저장된다: `meeting.segments.json`·`raw.md` 갱신, 원본은 처음 한 번 `meeting.segments.orig.json`, 편집 로그는 `meeting.edits.json`(범위 포함). 사람이 정한 이름은 `{"name", "source": "user"}`라 `rec2md voices enroll --from-names`의 입력이 된다.
+- `편집`을 켜면 문장을 눌러 바로 고친다(Enter 저장, Esc 취소). 고친 문장에는 "수정됨"이 붙고, 그 문장의 단어 시각·낮은 확률 표시는 버린다.
+- `복사`: 지금 상태(정한 화자 이름 반영)의 전체 녹취록을 클로바 txt 형식으로 클립보드에 넣는다.
+- 오른쪽 패널(좁은 화면에서는 `요약·메모` 버튼): `요약` 탭은 같은 폴더의 `meeting.녹취록.md`나 `meeting*.요약.md`를 읽기 전용으로 보여 주고, 안의 `MM:SS`를 누르면 그 시점을 재생한다. `메모` 탭은 쓰는 대로 `meeting.memo.md`에 저장된다(`rec2md notes`의 메모로 쓸 수 있다). 다른 편집기에서 메모 파일을 고쳤으면 덮어쓰지 않고 알린다.
+- 위쪽 키워드 칩: `meeting.corrections.json`의 고칠 후보(점선, 제안 표기는 툴팁)와 시리즈 용어집(`--series`, 없으면 corrections.json의 시리즈) 중 녹취에 나오는 것. 누르면 그 구간을 강조하고 첫 위치로 가며, 다시 누를 때마다 다음 구간으로 간다. Esc로 끈다.
+- 바꿀 때마다 저장된다: `meeting.segments.json`·`raw.md` 갱신, 원본은 처음 한 번 `meeting.segments.orig.json`, 편집 로그는 `meeting.edits.json`(화자 변경은 범위 포함, 문장 편집은 `set_text`와 고치기 전·후 문장). 사람이 정한 이름은 `{"name", "source": "user"}`라 `rec2md voices enroll --from-names`의 입력이 된다.
 - 판정 모드: 사례 구간을 앞뒤 1초 붙여 재생, 숫자 키로 답(0 모르겠음), R 다시 듣기. 답은 바로 `meeting.answers.json`에 저장되고 다시 열면 이어서 한다.
 
 ## 스킬 (Claude Code·Codex)
