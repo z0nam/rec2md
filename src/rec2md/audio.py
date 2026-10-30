@@ -25,6 +25,20 @@ def probe_duration(path: Path) -> float:
     return float(json.loads(out)["format"]["duration"])
 
 
+def write_wav(path: Path, data) -> Path:
+    """float32 배열(-1〜1) → 16bit mono wav (load_wav의 반대)."""
+    import wave
+
+    import numpy as np
+
+    with wave.open(str(path), "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(SAMPLE_RATE)
+        f.writeframes((np.clip(data, -1.0, 1.0) * 32767).astype(np.int16).tobytes())
+    return path
+
+
 def load_wav(path: Path):
     """normalize()가 만든 16bit mono wav → float32 numpy 배열."""
     import wave
