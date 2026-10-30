@@ -15,8 +15,11 @@ PAD = 0.2  # 구간 앞뒤로 붙이는 여유(초). 첫 음절이 잘리지 않
 class LocalMLX(Engine):
     name = "local"
 
-    def __init__(self, model: str | None = None):
+    def __init__(self, model: str | None = None, prompt: str | None = None):
         self.model = model or DEFAULT_MODEL
+        # 용어집 프롬프트. condition_on_previous_text=False라 30초 창마다 초기화되므로
+        # 청크(25초 이하) 단위로 넘기면 모든 청크에 적용된다. 청킹 없이 통째로 넣으면 첫 창에만 걸린다
+        self.prompt = prompt or None
 
     def _decode(self, audio, language: str, offset: float) -> list[Segment]:
         import mlx_whisper
@@ -32,6 +35,7 @@ class LocalMLX(Engine):
             hallucination_silence_threshold=2.0,
             no_speech_threshold=0.6,
             compression_ratio_threshold=2.4,
+            initial_prompt=self.prompt,
             verbose=None,
         )
         segs = []

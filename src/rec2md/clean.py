@@ -49,9 +49,25 @@ _KNOWN = [
 ]
 
 
-def drop_known_hallucinations(segs: list[Segment]) -> list[Segment]:
+def _prompt_echo(t: str, prompt_items: list[str]) -> bool:
+    """세그먼트가 프롬프트 항목만 나열한 것인가 (무음 구간에서 initial_prompt가 그대로 튀어나오는 환각).
+
+    항목 하나만 말한 짧은 발화("홍길동")는 진짜일 수 있으므로 항목 두 개 이상이 이어진 경우만 본다.
+    """
+    hits = 0
+    for item in sorted(prompt_items, key=len, reverse=True):
+        k = _norm(item)
+        if k and k in t:
+            t = t.replace(k, "", 1)
+            hits += 1
+    return hits >= 2 and not t
+
+
+def drop_known_hallucinations(segs: list[Segment], prompt: str | None = None) -> list[Segment]:
+    items = [x.strip() for x in prompt.split(",")] if prompt else []
+
     def bogus(s: Segment) -> bool:
         t = _norm(s.text)
-        return len(t) <= 20 and any(k in t for k in _KNOWN)
+        return (len(t) <= 20 and any(k in t for k in _KNOWN)) or (bool(items) and _prompt_echo(t, items))
 
     return [s for s in segs if not bogus(s)]
