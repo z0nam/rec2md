@@ -11,7 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from . import audio
-from .clean import collapse_repeats, drop_known_hallucinations
+from .clean import collapse_ngram_loops, collapse_repeats, drop_known_hallucinations
 from .engines import get_engine
 from .render import fmt_ts, render_raw
 from .segments import Transcript
@@ -63,7 +63,8 @@ def run_one(src: Path, args) -> Path:
 
         t0 = time.monotonic()
         engine = get_engine(args.engine, model=args.model, prompt=prompt)
-        segs = drop_known_hallucinations(collapse_repeats(engine.transcribe(wav, args.language, regions)), prompt)
+        segs = engine.transcribe(wav, args.language, regions)
+        segs = drop_known_hallucinations(collapse_ngram_loops(collapse_repeats(segs)), prompt)
         meta["asr_sec"] = round(time.monotonic() - t0, 1)
         meta["vad"] = regions is not None
         log(f"전사 {meta['asr_sec']}s (실시간 대비 {duration / max(meta['asr_sec'], 0.1):.1f}배)")
