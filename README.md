@@ -40,6 +40,7 @@ uv tool install --editable '.[diarize,render,export,office]'
 | `rec2md <파일...>` | 전사 + 화자분리 → `<이름>.segments.json`, `<이름>.raw.md` | 동작 |
 | `rec2md series ...` | 회의 시리즈 용어집·참석자 관리, 보정 후보 뽑기 | 동작 |
 | `rec2md render ...` | 회의록 JSON → 양식 회의록 (md·html·docx·hwpx, pdf·png) | 동작 |
+| `rec2md notes <segments.json> <메모>` | 회의 메모 문단마다 녹취 근거 구간 후보 → 에이전트가 메모 보정본 작성 | 동작 |
 | `rec2md render --kind transcript ...` | segments.json → 클로바노트식 녹취록 (txt·md·html) | 작업 중 |
 | `rec2md voices ...` | 목소리 등록, 새 녹취에 실명 자동 태깅 | 동작 |
 | `rec2md batch <폴더>` | 폴더 일괄 전사, `--dry-run`, 중단 후 이어서 | 예정 |
@@ -114,6 +115,18 @@ rec2md render meeting.minutes.json --template ji --format hwpx,docx
 - `template.toml`을 두면 그 양식은 사용자 것 하나만 읽는다(내장과 섞지 않음). 원본 파일은 사용자 폴더 → 내장 순으로 파일마다 찾는다.
 - 칸 이름(`label`), 원본에서 찾을 칸 글자(`anchor`, 공백 무시), 값 칸 위치(`where = "right"|"below"`), 한 줄에 나란히 둘 칸(`row`) 등 스키마는 [`docs/templates.md`](docs/templates.md).
 
+### 회의 메모 보정
+
+회의 중에 타이핑한 메모(md·txt·docx·hwpx)가 있으면 녹취와 맞춰 본다.
+
+```sh
+rec2md notes meeting.segments.json 메모.docx [--series 정례회의] [--to-series 정례회의]
+```
+
+- `meeting.notes-align.json`: 메모 문단마다 녹취 근거 후보 구간, 녹취에 없는 숫자·인명·용어, 메모가 다루지 않은 녹취 구간. 키워드·숫자(단위 포함)·인명 겹침으로 찾는다.
+- 무엇이 틀렸는지 판단하고 보정본(`메모.보정.md`, 바꾼 줄마다 `[타임스탬프]` 근거)을 쓰는 것은 스킬의 에이전트가 한다. 원본 메모는 그대로 둔다.
+- `--to-series`는 메모를 시리즈 자료로 넣어 다음 전사의 용어 후보로 쓴다.
+
 ## 스킬 (Claude Code·Codex)
 
 `.claude/skills/rec2md/SKILL.md`. "녹취록 만들어줘", "회의록 정리", "○○ 양식 회의록" 같은 요청에 쓰인다.
@@ -121,7 +134,8 @@ rec2md render meeting.minutes.json --template ji --format hwpx,docx
 1. `rec2md`로 전사
 2. raw.md를 정리해 `<이름>.녹취록.md`(요약 + 화자 실명 정리). `corrections.json`이 있으면 그 후보만 고친다
 3. 양식 회의록이 필요하면 `minutes.json`을 쓰고 `rec2md render`
+4. 회의 메모가 있으면 `rec2md notes`로 정렬하고 메모 보정본을 쓴다
 
 ## 개인정보
 
-녹취, 전사 결과, `minutes.json`, 렌더한 회의록, 시리즈 용어집, 목소리 DB는 모두 개인 데이터다. 레포는 퍼블릭이므로 커밋하지 않는다(`.gitignore`가 주요 파일을 막는다). 테스트는 합성 데이터만 쓴다.
+녹취, 전사 결과, `minutes.json`, 렌더한 회의록, 메모 정렬·보정본, 시리즈 용어집, 목소리 DB는 모두 개인 데이터다. 레포는 퍼블릭이므로 커밋하지 않는다(`.gitignore`가 주요 파일을 막는다). 테스트는 합성 데이터만 쓴다.
