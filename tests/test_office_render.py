@@ -202,6 +202,7 @@ def test_docx_user_form(minutes, tmp_path):
     form.add_paragraph("{% for x in content %}[{{ x.level }}]{{ x.prefix }}{{ x.text }} {% endfor %}")
     form.save(str(user / "form.docx"))
 
+    minutes.place = "Discuss {{title}} and {% if x %} placeholders"  # 값 안의 템플릿 문법은 그대로 남아야 한다
     t = load_template("kr-standard")
     text = docx_text(render_docx(minutes, t, tmp_path / "out.docx"))
     assert f"{t.doc_title(minutes)} / {minutes.place}" in text
@@ -209,7 +210,7 @@ def test_docx_user_form(minutes, tmp_path):
     first = t.content_lines(minutes)[0]
     assert f"[0]{first.prefix}{first.text}" in text
     assert "<태그>, & 기호" in text
-    assert not re.search(r"\{\{|\{%", text)
+    assert not re.search(r"\{\{|\{%", text.replace(minutes.place, ""))
 
 
 @pytest.mark.skipif(not shutil.which("soffice") and not Path("/opt/homebrew/bin/soffice").exists(),
