@@ -22,6 +22,7 @@ from pathlib import Path
 from ..minutes import Minutes
 
 FONT = "맑은 고딕"
+FONT_PT = 10
 LABEL_FILL = "EDEDED"
 LEVEL_INDENT_MM = 4
 
@@ -81,7 +82,7 @@ def _build(m: Minutes, template, out: Path) -> Path:
     sec.page_width, sec.page_height = Mm(210), Mm(297)
     sec.left_margin = sec.right_margin = Mm(20)
     sec.top_margin = sec.bottom_margin = Mm(20)
-    _set_font(doc.styles["Normal"], 10)
+    _set_font(doc.styles["Normal"], FONT_PT)
 
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -113,10 +114,11 @@ def _build(m: Minutes, template, out: Path) -> Path:
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             p.add_run(f.label).bold = True
             if f.value == "content":
-                lines = [(x.level, str(x)) for x in template.content_lines(m)]
+                lines = [(x.level, str(x), x.prefix) for x in template.content_lines(m)]
                 value.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
             else:
-                lines = [(1 if f.value == "attendees" and s.startswith("- ") else 0, s) for s in vals[f.value]]
+                lines = [(1, s, "- ") if f.value == "attendees" and s.startswith("- ") else (0, s)
+                         for s in vals[f.value]]
                 value.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
             _fill_cell(value, lines)
     doc.core_properties.title = m.title
@@ -125,15 +127,24 @@ def _build(m: Minutes, template, out: Path) -> Path:
     return out
 
 
-def _fill_cell(cell, lines: list[tuple[int, str]]) -> None:
-    from docx.shared import Mm
+def _fill_cell(cell, lines: list[tuple]) -> None:
+    """줄마다 문단 하나. (단계, 글[, 머리기호]) — 머리기호가 있으면 둘째 줄이 기호 뒤 글자에 맞게 내어쓴다."""
+    from docx.shared import Mm, Pt
 
     first = cell.paragraphs[0]
-    for i, (level, text) in enumerate(lines or [(0, "")]):
+    for i, (level, text, *prefix) in enumerate(lines or [(0, "")]):
         p = first if i == 0 else cell.add_paragraph()
         p.add_run(text)
-        if level:
-            p.paragraph_format.left_indent = Mm(LEVEL_INDENT_MM * level)
+        left = Mm(LEVEL_INDENT_MM * level)
+        hang = Pt(_marker_width_pt(prefix[0], FONT_PT)) if prefix and prefix[0].strip() else 0
+        if left or hang:
+            p.paragraph_format.left_indent = left + hang
+            p.paragraph_format.first_line_indent = -hang if hang else None
+
+
+def _marker_width_pt(prefix: str, size: float) -> float:
+    """머리기호 폭(pt) 어림. 도형·화살표·한글은 글자 크기만큼, 숫자·기호·공백은 절반 (hwpx와 같은 규칙)."""
+    return sum(size if ord(ch) >= 0x2190 else size * 0.5 for ch in prefix)
 
 
 def _set_font(style, size_pt: int) -> None:

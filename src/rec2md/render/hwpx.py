@@ -31,7 +31,8 @@ from pathlib import Path
 
 from ..minutes import Minutes
 
-Lines = list[tuple[int, str]]
+# 칸에 넣을 줄: (단계, 글[, 머리기호]). 머리기호(글의 앞부분)가 있으면 둘째 줄부터 그 폭만큼 내어쓴다
+Lines = list[tuple]
 
 SECTION_RE = re.compile(r"Contents/section\d+\.xml")
 PLACEHOLDER_RE = re.compile(r"\{\{\s*(\w+)\s*\}\}")
@@ -63,9 +64,9 @@ def _cells(m: Minutes, template, vals: dict[str, list[str]], built: bool = False
     cells: dict[str, tuple[str, Lines]] = {}
     for f in template.fields:
         if f.value == "content":
-            lines = [(x.level, str(x)) for x in template.content_lines(m)]
+            lines = [(x.level, str(x), x.prefix) for x in template.content_lines(m)]
         elif f.value == "attendees":  # 소속 줄(0) 아래 "- 이름" 줄(1)
-            lines = [(1 if s.startswith("- ") else 0, s) for s in vals["attendees"]]
+            lines = [(1, s, "- ") if s.startswith("- ") else (0, s) for s in vals["attendees"]]
         else:
             lines = [(0, s) for s in vals[f.value]]
         cells[f.label if built else f.anchor] = ("right" if built else f.where, lines)
@@ -78,7 +79,9 @@ def fill_form(form: Path, cells: dict[str, tuple[str, Lines]], out: Path,
               placeholders: dict[str, str] | None = None, required: bool = True) -> Path:
     """`cells`: 라벨 → (방향 "right"|"below", 줄 목록). `required`면 찾지 못한 라벨은 KeyError."""
     entries = _read_zip(form)
-    metrics = _metrics(entries.get("Contents/header.xml", b""))
+    header = entries.get("Contents/header.xml", b"").decode("utf-8")
+    metrics = _metrics(header.encode("utf-8"))
+    hang = _Hanging(header, metrics[0])
     found: set[str] = set()
     texts: list[str] = []
     for name, data in entries.items():
@@ -87,10 +90,12 @@ def fill_form(form: Path, cells: dict[str, tuple[str, Lines]], out: Path,
             # 자리표시자는 양식에서 먼저 바꾼다 — 채운 값에 든 `{{…}}` 글자는 그대로 둬야 한다
             if placeholders:
                 xml = _replace_placeholders(xml, placeholders)
-            xml, hit = _fill_section(xml, cells, metrics)
+            xml, hit = _fill_section(xml, cells, metrics, hang)
             entries[name] = xml.encode("utf-8")
             found |= hit
             texts.append(_plain(xml))
+    if hang.added:
+        entries["Contents/header.xml"] = _bump(header, "paraProperties", "".join(hang.added)).encode("utf-8")
     if required and (missing := set(cells) - found):
         raise KeyError(f"양식에서 라벨을 찾지 못함: {', '.join(sorted(missing))}")
     _write_zip(form, Path(out), entries, preview="\n".join(texts))
@@ -213,6 +218,46 @@ def _targets(xml: str, root: _Node, labels: dict[str, str]) -> dict[str, _Node]:
     return out
 
 
+class _Hanging:
+    """머리기호 폭만큼 내어쓰는 문단 모양을 header.xml에 덧붙인다(원본 문단 모양을 복제해 intent만 바꿈).
+
+    한글 문단 모양의 `intent`가 음수면 둘째 줄부터 그만큼 들어간다(내어쓰기). 실제 회의록 양식도
+    `-`·`▶` 항목에 이렇게 손으로 맞춘 문단 모양을 쓴다.
+    """
+
+    def __init__(self, header: str, chars: dict[str, int]):
+        self.header, self.chars = header, chars
+        ids = [int(i) for i in re.findall(r'<hh:paraPr id="(\d+)"', header)]
+        self.next_id = max(ids, default=-1) + 1
+        self.made: dict[tuple[str, int], int] = {}
+        self.added: list[str] = []
+
+    def apply(self, proto: str, prefix: str) -> str:
+        open_tag = re.match(r"<hp:p\b[^>]*>", proto).group(0)
+        base = _attrs(open_tag).get("paraPrIDRef", "0")
+        run = RUN_RE.search(proto)
+        size = self.chars.get(_attrs(run.group(1)).get("charPrIDRef", "0"), 1000) if run else 1000
+        width = int(_marker_width(prefix, size))
+        key = (base, width)
+        if key not in self.made:
+            body = re.search(rf'<hh:paraPr id="{base}".*?</hh:paraPr>', self.header, re.S)
+            if body is None:
+                return proto
+            new_id = self.next_id
+            self.next_id += 1
+            clone = re.sub(r'id="\d+"', f'id="{new_id}"', body.group(0), count=1)
+            clone = re.sub(r'(<hc:intent value=")-?\d+(")', rf'\g<1>{-width}\2', clone)
+            self.made[key] = new_id
+            self.added.append(clone)
+        new_tag = re.sub(r'paraPrIDRef="\d+"', f'paraPrIDRef="{self.made[key]}"', open_tag, count=1)
+        return new_tag + proto[len(open_tag):]
+
+
+def _marker_width(prefix: str, size: int) -> float:
+    """머리기호 폭(HWPUNIT) 어림. 도형·화살표·한글은 글자 크기만큼, 숫자·기호·공백은 절반."""
+    return sum(size if ord(ch) >= 0x2190 else size * 0.5 for ch in prefix)
+
+
 def _para_like(proto: str, text: str) -> str:
     """견본 문단(원문 문자열)의 문단·글자 모양으로 글 한 줄짜리 새 문단을 만든다."""
     open_tag = re.match(r"<hp:p\b[^>]*>", proto).group(0)
@@ -241,7 +286,7 @@ def _pick_protos(xml: str, ps: list[_Node], marks: list[str] | None) -> list[_No
     return keep
 
 
-def _fill_section(xml: str, cells: dict[str, tuple[str, Lines]], metrics) -> tuple[str, set[str]]:
+def _fill_section(xml: str, cells: dict[str, tuple[str, Lines]], metrics, hang=None) -> tuple[str, set[str]]:
     root = _tree(xml)
     targets = _targets(xml, root, {k: v[0] for k, v in cells.items()})
     edits = []
@@ -249,7 +294,12 @@ def _fill_section(xml: str, cells: dict[str, tuple[str, Lines]], metrics) -> tup
     for key, tc in targets.items():
         ps = _paras(tc)
         protos = [xml[p.start:p.end] for p in ps]
-        new = [_para_like(protos[min(level, len(protos) - 1)], text) for level, text in cells[key][1] or [(0, "")]]
+        new = []
+        for level, text, *prefix in cells[key][1] or [(0, "")]:
+            proto = protos[min(level, len(protos) - 1)]
+            if prefix and prefix[0].strip() and hang is not None:
+                proto = hang.apply(proto, prefix[0])
+            new.append(_para_like(proto, text))
         edits.append((ps[0].start, ps[-1].end, "".join(new)))
         tbl = tc.parent
         need = _need_height(xml, tbl, tc, new, metrics)
@@ -302,7 +352,7 @@ def _need_height(xml: str, tbl: _Node, tc: _Node, paras: list[str], metrics) -> 
         kind, val, left = pprs.get(_attrs(re.match(r"<hp:p\b[^>]*>", p).group(0)).get("paraPrIDRef"),
                                    ("PERCENT", 160, 0))
         line = val if kind == "FIXED" else size * max(val, 100) // 100
-        n = max(1, -(-int(_text_width(_text(p, 0, len(p)), size)) // max(width - left, 1000)))
+        n = len(_wrap(_text(p, 0, len(p)), size, max(width - left, size)))  # 미리보기 캐시와 같은 줄바꿈
         need += n * line
     return need
 

@@ -6,6 +6,7 @@ pdf·png 변환은 외부 도구(rhwp, rsvg-convert, LibreOffice)가 있을 때�
 
 from __future__ import annotations
 
+import html
 import re
 import shutil
 import xml.etree.ElementTree as ET
@@ -115,10 +116,67 @@ def test_hwpx_section_is_spliced_not_reserialized(minutes, tmp_path):
     out = render_hwpx(minutes, t, tmp_path / "out.hwpx")
     with zipfile.ZipFile(form) as a, zipfile.ZipFile(out) as b:
         src, dst = a.read("Contents/section0.xml").decode(), b.read("Contents/section0.xml").decode()
-        assert a.read("Contents/header.xml") == b.read("Contents/header.xml")
+        h_src, h_dst = a.read("Contents/header.xml").decode(), b.read("Contents/header.xml").decode()
+    # header는 내어쓰기 문단 모양을 덧붙인 것(과 그 개수) 말고는 원문 그대로다
+    last = max(int(i) for i in re.findall(r'<hh:paraPr id="(\d+)"', h_src))
+    added = "".join(m.group(0) for m in re.finditer(r'<hh:paraPr id="(\d+)".*?</hh:paraPr>', h_dst, re.S)
+                    if int(m.group(1)) > last)
+    assert added
+    strip = lambda h: re.sub(r'(<hh:paraProperties itemCnt=")\d+', r"\1", h)  # noqa: E731
+    assert strip(h_dst.replace(added, "")) == strip(h_src)
     head = src[: src.index("<hp:tbl ")]
     assert dst.startswith(head.replace("{{doc_title}}", t.doc_title(minutes)))
     assert " />" not in dst  # ElementTree식 빈 태그가 끼어들지 않음
+
+
+def test_hwpx_cell_height_matches_preview_wrap(minutes, tmp_path):
+    """칸 높이 어림과 미리보기 줄바꿈이 같은 계산이라, 공백에서 끊겨 늘어난 줄도 칸 안에 든다 (Codex 리뷰 #18)."""
+    from rec2md.minutes import Item, Section
+
+    word = "가" * 23
+    minutes.summary, minutes.decisions, minutes.actions, minutes.next_meeting = [], [], [], ""
+    minutes.sections = [Section("긴 단어", [Item(" ".join([word] * 8)), Item("짧은 줄")])]
+    t = load_template("kr-standard")
+    entries = hwpx._read_zip(render_hwpx(minutes, t, tmp_path / "out.hwpx"))
+    xml = entries["Contents/section0.xml"].decode("utf-8")
+    header = entries["Contents/header.xml"]
+    cached = hwpx._layout_cache(xml, hwpx._metrics(header))
+    root = hwpx._tree(cached)
+    cell = next(tc for tc in hwpx._walk(root, "tc") if word in hwpx._cell_text(cached, tc))
+    height = int(hwpx._attrs(hwpx._own(cached, cell, "cellSz").group(0))["height"])
+    last = re.findall(r'vertpos="(\d+)" vertsize="(\d+)"', cached[cell.start:cell.end])[-1]
+    assert int(last[0]) + int(last[1]) <= height
+
+
+def test_hwpx_hanging_indent(minutes, tmp_path):
+    """머리기호가 있는 줄은 기호 폭만큼 내어쓰는 문단 모양(intent 음수)을 쓴다. 같은 모양은 한 번만 만든다."""
+    t = load_template("ji")
+    out = render_hwpx(minutes, t, tmp_path / "out.hwpx")
+    with zipfile.ZipFile(out) as z:
+        header, sec = z.read("Contents/header.xml").decode(), z.read("Contents/section0.xml").decode()
+    intents = {i: int(v) for i, v in re.findall(
+        r'<hh:paraPr id="(\d+)".*?<hc:intent value="(-?\d+)"', header, re.S)}
+    lines = {str(x): x for x in t.content_lines(minutes)}
+    seen = 0
+    for ppr, text in re.findall(r'<hp:p [^>]*paraPrIDRef="(\d+)"[^>]*><hp:run[^>]*><hp:t>([^<]*)</hp:t>', sec):
+        x = lines.get(html.unescape(text))
+        if x is not None and x.prefix.strip():
+            assert intents[ppr] < 0, text
+            seen += 1
+    assert seen >= len([x for x in lines.values() if x.prefix.strip()])
+    hanging = [i for i, v in intents.items() if v < 0]
+    assert len(hanging) == len(set(hanging))
+
+
+def test_docx_hanging_indent(minutes, tmp_path):
+    docx = pytest.importorskip("docx")
+    from rec2md.render.docx import render_docx
+
+    out = render_docx(minutes, load_template("ji"), tmp_path / "ji.docx")
+    paras = [p for tbl in docx.Document(str(out)).tables for row in tbl.rows for c in row.cells for p in c.paragraphs]
+    marked = [p for p in paras if p.text.startswith(("▶ ", "- "))]
+    assert marked and all(p.paragraph_format.first_line_indent < 0 for p in marked)
+    assert all(p.paragraph_format.left_indent >= -p.paragraph_format.first_line_indent for p in marked)
 
 
 def test_hwpx_below_and_nested_tables():
