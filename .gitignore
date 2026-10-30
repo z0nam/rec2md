@@ -19,3 +19,16 @@ _transcripts/
 *.voices.npz
 *.minutes.json
 *.corrections.json
+
+# 원내 자료 — 테스트·평가에 쓰더라도 커밋 금지 (실데이터는 local/, 양식 원본은 ~/.config/rec2md/)
+directory*.csv
+gold*.txt
+*.gold.*
+clips/
+ctx-eval/
+attendees.txt
+glossary.txt
+*.voices.db
+# 회사 양식 원본(hwpx·docx)은 레포에 두지 않는다. 내장 ji 양식은 template.toml만 둔다
+src/rec2md/templates/ji/*.hwpx
+src/rec2md/templates/ji/*.docx
