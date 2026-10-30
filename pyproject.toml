@@ -18,6 +18,7 @@ render = [
 ]
 export = [
     "pypdfium2>=4.30",
+    "pillow>=10",  # pypdfium2의 to_pil()
 ]
 
 [dependency-groups]

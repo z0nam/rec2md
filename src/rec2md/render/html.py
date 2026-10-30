@@ -6,18 +6,15 @@ from pathlib import Path
 
 from ..minutes import Minutes
 from ..templates import Template
-from ._jinja import colspans, context, environment
+from ._jinja import colspans, context, environment, load
 
 
 def render_html(m: Minutes, template: Template, out: Path) -> Path:
-    src = template.file("html")
-    if src is None:
-        raise FileNotFoundError(f"양식 '{template.name}'에 html 원본({template.files.get('html')})이 없음")
     env = environment(template, autoescape=True)
     ctx = context(m, template)
     width = max((len(r) for r in ctx["rows"]), default=1)
     ctx |= {"width": width, "spans": [colspans(r, width) for r in ctx["rows"]]}
-    out.write_text(env.get_template(src.name).render(**ctx), encoding="utf-8")
+    out.write_text(load(env, template, "html").render(**ctx), encoding="utf-8")
     return out
 
 

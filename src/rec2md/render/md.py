@@ -6,7 +6,7 @@ from pathlib import Path
 
 from ..minutes import Minutes
 from ..templates import Line, Template
-from ._jinja import context, environment
+from ._jinja import context, environment, load
 
 BULLETS = {"-", "*", "·", "•", "+"}
 
@@ -30,12 +30,9 @@ def content_md(lines: list[Line]) -> str:
 
 
 def render_md(m: Minutes, template: Template, out: Path) -> Path:
-    src = template.file("md")
-    if src is None:
-        raise FileNotFoundError(f"양식 '{template.name}'에 md 원본({template.files.get('md')})이 없음")
     env = environment(template, autoescape=False)
     env.filters["cell"] = cell
     ctx = context(m, template) | {"content_md": content_md(template.content_lines(m))}
-    text = env.get_template(src.name).render(**ctx)
+    text = load(env, template, "md").render(**ctx)
     out.write_text(text.rstrip() + "\n", encoding="utf-8")
     return out

@@ -2191,6 +2191,7 @@ diarize = [
     { name = "pyannote-audio" },
 ]
 export = [
+    { name = "pillow" },
     { name = "pypdfium2" },
 ]
 render = [
@@ -2207,6 +2208,7 @@ dev = [
 requires-dist = [
     { name = "jinja2", marker = "extra == 'render'", specifier = ">=3.1" },
     { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.4.2" },
+    { name = "pillow", marker = "extra == 'export'", specifier = ">=10" },
     { name = "pyannote-audio", marker = "extra == 'diarize'", specifier = ">=4.0" },
     { name = "pypdfium2", marker = "extra == 'export'", specifier = ">=4.30" },
     { name = "python-dotenv", specifier = ">=1.0" },

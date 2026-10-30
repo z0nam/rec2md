@@ -88,6 +88,14 @@ def test_user_template_dir_overrides(minutes, tmp_path, monkeypatch):
     assert render_md(minutes, t, tmp_path / "b.md").read_text(encoding="utf-8") == "# 사용자 가상 도시 교통 연구 착수 회의\n"
 
 
+def test_template_file_in_subdir(minutes, tmp_path):
+    d = tmp_path / "sub"
+    (d / "layouts").mkdir(parents=True)
+    (d / "template.toml").write_text('[files]\nmd = "layouts/page.md.j2"\n', encoding="utf-8")
+    (d / "layouts" / "page.md.j2").write_text("하위 {{ title }}\n", encoding="utf-8")
+    assert render_md(minutes, load_template(d), tmp_path / "s.md").read_text(encoding="utf-8") == "하위 회의록\n"
+
+
 def test_template_rejects_unknown_keys(tmp_path):
     d = tmp_path / "bad"
     d.mkdir()

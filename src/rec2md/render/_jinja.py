@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..minutes import Minutes
 from ..templates import Field, Template
 
@@ -15,6 +17,13 @@ def environment(t: Template, autoescape: bool):
     return jinja2.Environment(loader=jinja2.FileSystemLoader([str(d) for d in t.dirs]),
                               autoescape=autoescape, trim_blocks=True, lstrip_blocks=True,
                               keep_trailing_newline=True, undefined=jinja2.StrictUndefined)
+
+
+def load(env, t: Template, fmt: str):
+    """양식의 [files]에 적힌 상대 경로(하위 폴더 포함) 그대로 Jinja 템플릿을 찾는다."""
+    if t.file(fmt) is None:
+        raise FileNotFoundError(f"양식 '{t.name}'에 {fmt} 원본({t.files.get(fmt)})이 없음")
+    return env.get_template(Path(t.files[fmt]).as_posix())
 
 
 def context(m: Minutes, t: Template) -> dict:
