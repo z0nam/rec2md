@@ -20,6 +20,10 @@ export = [
     "pypdfium2>=4.30",
     "pillow>=10",  # pypdfium2의 to_pil()
 ]
+office = [
+    "docxtpl>=0.18",
+    "python-docx>=1.1",
+]
 
 [dependency-groups]
 dev = [
