@@ -234,3 +234,63 @@ def test_utterance_matching_speaker_header_regression(tmp_path):
     assert parsed.segments[1].start == 15.0
     assert parsed.segments[1].end == 30.0
 
+
+
+# ── 목소리 DB 이름(tentative, same_as), 녹음 일시 없음, render --kind transcript ──
+
+def test_resolve_speaker_tentative():
+    meta = {"speaker_names": {
+        "화자1": {"name": "홍길동", "score": 0.81},
+        "화자2": {"name": "김철수", "score": 0.52, "tentative": True},
+        "화자3": {"name": "이영희", "tentative": True, "source": "user"},
+    }}
+    assert resolve_speaker("화자1", None, meta) == "홍길동"
+    assert resolve_speaker("화자2", None, meta) == "김철수?"
+    assert resolve_speaker("화자3", None, meta) == "이영희"  # 사용자가 지정한 이름은 ? 없음
+    assert resolve_speaker("화자2", {"화자2": "박민수"}, meta) == "박민수"  # 인자로 준 이름이 우선
+
+
+def test_same_as_split_speaker_listed_once(tmp_path):
+    """한 사람이 두 화자로 쪼개져 same_as로 묶이면 참석자 줄에 한 번만 (확신 있는 표기로)."""
+    segs = [
+        Segment(start=0.0, end=5.0, text="첫 발언", speaker="화자3"),
+        Segment(start=5.0, end=9.0, text="다른 사람", speaker="화자2"),
+        Segment(start=9.0, end=14.0, text="같은 사람 다시", speaker="화자1"),
+    ]
+    t = Transcript(source="s.wav", duration=14.0, engine="mock", language="ko", segments=segs, meta={
+        "speaker_names": {
+            "화자1": {"name": "홍길동", "score": 0.8},
+            "화자3": {"name": "홍길동", "score": 0.6, "tentative": True, "same_as": "화자1"},
+            "화자2": {"name": "김철수", "score": 0.7},
+        }})
+    txt = render_clova_txt(t)
+    assert txt.splitlines()[2] == "홍길동 김철수"
+    assert "홍길동? 00:00" in txt  # 발화 블록에는 쪼개진 화자의 확신 정도가 남는다
+    md = render_clova_md(t)
+    assert "**참석자**: 홍길동, 김철수" in md
+    assert render_clova_html(t).count('class="attendee-tag"') == 2
+
+
+def test_missing_recorded_at_is_blank(tmp_path):
+    """녹음 일시를 모르면 비운다(내보낸 시각을 넣지 않는다). 파서는 길이만 읽는다."""
+    t = Transcript(source="s.wav", duration=61.0, engine="mock", language="ko",
+                   segments=[Segment(start=0.0, end=61.0, text="안녕하세요", speaker="화자1")], meta={})
+    out = export_transcript(t, "txt", tmp_path / "s.txt")
+    head = out.read_text(encoding="utf-8").splitlines()[1]
+    assert head == "・ 1Minutes 1seconds"
+    assert clova_txt.parse(out).duration == 61.0
+    assert render_clova_md(t).splitlines()[2].startswith("・ 1Minutes")
+
+
+def test_cli_render_transcript_end_to_end(synthetic_transcript, tmp_path):
+    """#9의 `rec2md render --kind transcript`가 이 모듈로 txt·md·html을 만든다(가짜 함수 없이)."""
+    from rec2md import cmd_render
+
+    seg = tmp_path / "meeting.segments.json"
+    synthetic_transcript.to_json(seg)
+    cmd_render.main([str(seg), "--kind", "transcript", "--format", "txt,md,html", "--names", "화자1=홍길동"])
+    for fmt in ("txt", "md", "html"):
+        assert (tmp_path / f"meeting.{fmt}").is_file()
+    txt = (tmp_path / "meeting.txt").read_text(encoding="utf-8")
+    assert "홍길동 00:00" in txt and "참석자 2" in txt
+    assert clova_txt.parse(tmp_path / "meeting.txt").segments[0].speaker == "홍길동"

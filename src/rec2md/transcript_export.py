@@ -9,7 +9,6 @@ from __future__ import annotations
 import html
 import re
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 from .segments import Transcript
@@ -32,11 +31,13 @@ def _format_datetime(t: Transcript, recorded_at: str | None = None) -> str:
         if t.meta.get("time"):
             return f"{d} {t.meta['time']}"
         return d
-    now = datetime.now()
-    day = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][now.weekday()]
-    ampm = "AM" if now.hour < 12 else "PM"
-    h12 = now.hour % 12 or 12
-    return f"{now.strftime('%Y.%m.%d')} {day} {ampm} {h12}:{now.strftime('%M')}"
+    # 녹음 일시를 모르면 비워 둔다 — 내보낸 시각을 녹음 일시처럼 적으면 틀린 정보가 된다
+    return ""
+
+
+def _head_line(dt_str: str, dur_str: str) -> str:
+    """"일시 ・ 길이". 일시가 없으면 "・ 길이"(clova_txt 파서는 ・ 뒤만 읽는다)."""
+    return f"{dt_str} ・ {dur_str}" if dt_str else f"・ {dur_str}"
 
 
 def format_duration(dur_sec: float) -> str:
@@ -62,7 +63,11 @@ def format_ts(sec: float) -> str:
 
 
 def resolve_speaker(spk: str | None, names: dict[str, str] | None, meta: dict) -> str:
-    """화자 라벨(예: 화자1)을 실명 매핑으로 변환. 없으면 '참석자 N'."""
+    """화자 라벨(예: 화자1)을 실명 매핑으로 변환. 없으면 '참석자 N'.
+
+    목소리 DB가 자동으로 붙인 이름 중 확신이 낮은 것(tentative)은 `이름?`으로 표시한다.
+    사용자가 지정한 이름(source "user")과 `names` 인자로 준 이름은 그대로 쓴다.
+    """
     if not spk:
         return "참석자 1"
     if names and spk in names:
@@ -72,7 +77,10 @@ def resolve_speaker(spk: str | None, names: dict[str, str] | None, meta: dict) -
     if isinstance(spk_names, dict) and spk in spk_names:
         val = spk_names[spk]
         if isinstance(val, dict):
-            return val.get("name") or spk
+            name = val.get("name")
+            if not name:
+                return spk
+            return f"{name}?" if val.get("tentative") and val.get("source") != "user" else name
         if isinstance(val, str):
             return val
 
@@ -84,6 +92,17 @@ def resolve_speaker(spk: str | None, names: dict[str, str] | None, meta: dict) -
     if m2:
         return f"참석자 {int(m2.group(1)) + 1}"
     return spk
+
+
+def attendees(turns: list[Turn]) -> list[str]:
+    """참석자 목록(처음 말한 순서). 한 사람이 여러 화자로 쪼개져(same_as) `이름`과 `이름?`으로 나와도
+    한 번만 적고, 확신 있는 표기(`?` 없음)가 하나라도 있으면 그것을 쓴다."""
+    out: dict[str, str] = {}
+    for turn in turns:
+        key = turn.speaker.rstrip("?")
+        if out.get(key, "?").endswith("?"):
+            out[key] = turn.speaker
+    return list(out.values())
 
 
 def iter_turns(t: Transcript, names: dict[str, str] | None = None) -> list[Turn]:
@@ -123,12 +142,12 @@ def render_clova_txt(
     dur_str = format_duration(t.duration)
 
     turns = iter_turns(t, names=names)
-    unique_speakers = list(dict.fromkeys(turn.speaker for turn in turns))
+    unique_speakers = attendees(turns)
     attendees_str = " ".join(unique_speakers)
 
     lines = [
         doc_title,
-        f"{dt_str} ・ {dur_str}",
+        _head_line(dt_str, dur_str),
         attendees_str,
         "",
     ]
@@ -154,13 +173,13 @@ def render_clova_md(
     dur_str = format_duration(t.duration)
 
     turns = iter_turns(t, names=names)
-    unique_speakers = list(dict.fromkeys(turn.speaker for turn in turns))
+    unique_speakers = attendees(turns)
     attendees_str = ", ".join(unique_speakers) if unique_speakers else "없음"
 
     lines = [
         f"# {doc_title}",
         "",
-        f"{dt_str} ・ {dur_str}  ",
+        f"{_head_line(dt_str, dur_str)}  ",
         f"**참석자**: {attendees_str}",
         "",
         "---",
@@ -185,7 +204,7 @@ def render_clova_html(
     dur_str = format_duration(t.duration)
 
     turns = iter_turns(t, names=names)
-    unique_speakers = list(dict.fromkeys(turn.speaker for turn in turns))
+    unique_speakers = attendees(turns)
 
     attendees_html = "".join(
         f'<span class="attendee-tag">{html.escape(spk)}</span>'
@@ -324,7 +343,7 @@ def render_clova_html(
 <div class="container">
   <header>
     <h1>{escaped_title}</h1>
-    <div class="meta">{html.escape(dt_str)} ・ {html.escape(dur_str)}</div>
+    <div class="meta">{html.escape(_head_line(dt_str, dur_str))}</div>
     <div class="attendees">
       <span class="attendee-label">참석자:</span>
       {attendees_html}
@@ -355,7 +374,7 @@ def export_transcript(
         out: 출력 파일 경로 또는 디렉터리 경로
         names: 화자 라벨 매핑 (예: {"화자1": "홍길동"}) - 미지정시 t.meta["speaker_names"] 참조
         title: 회의명 (미지정시 t.meta["title"] 또는 파일명)
-        recorded_at: 녹음 일시 문자열 (미지정시 t.meta 일시 또는 현재 시각)
+        recorded_at: 녹음 일시 문자열 (미지정시 t.meta 일시, 그것도 없으면 비움)
 
     Returns:
         실제 저장된 파일의 Path
