@@ -70,7 +70,8 @@ def run_one(src: Path, args) -> Path:
         segs = drop_known_hallucinations(collapse_ngram_loops(collapse_repeats(segs)), prompt)
         meta["asr_sec"] = round(time.monotonic() - t0, 1)
         meta["vad"] = regions is not None
-        log(f"전사 {meta['asr_sec']}s (실시간 대비 {duration / max(meta['asr_sec'], 0.1):.1f}배)")
+        heard = meta["trim"]["kept_sec"] if "trim" in meta else duration  # 잘라냈으면 실제로 들은 길이로
+        log(f"전사 {meta['asr_sec']}s (실시간 대비 {heard / max(meta['asr_sec'], 0.1):.1f}배)")
 
         rename: dict[str, str] = {}
         if turns is not None:
@@ -110,6 +111,9 @@ def _trim_silence(wav: Path, out: Path, meta: dict):
     audio.write_wav(out, trim.cut_audio(data, p.keep))
     meta["trim"] = trim.meta(p, m)
     log(f"긴 무음 {len(p.cut)}곳 잘라냄: {fmt_ts(p.duration)} → {fmt_ts(p.kept_sec)} (임계 {p.threshold:.0f}dB)")
+    if p.review:
+        log("잘라낸 곳 중 약한 소리가 있던 구간(다시 들어 볼 것, 필요하면 --no-trim): "
+            + ", ".join(f"{fmt_ts(s)}-{fmt_ts(e)}" for s, e in p.review))
     return out, m
 
 

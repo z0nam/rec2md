@@ -103,3 +103,16 @@ def test_trim_silence_noop_returns_original(tmp_path):
 def test_cli_has_no_trim_option():
     args = cli.build_parser().parse_args(["x.mp3", "--no-trim"])
     assert args.no_trim is True
+
+
+def test_review_marks_cut_windows_with_faint_sound():
+    """잘라낸 구간 안에 약한 소리가 몰린 1분 창은 meta.trim.review로 남긴다(먼 말소리일 수 있음)."""
+    db = profile(("s", 600), ("n", 1800), ("s", 600))
+    faint = 600 + 900                     # 잘리는 구간 한가운데 1분
+    db[faint:faint + 60:12] = -20.0       # 1분에 5번(약 8%): 말소리 기준(10%) 아래, 다시 들어 볼 기준(5%) 위
+    p = trim.plan(db)
+    assert p.cut and p.review
+    assert any(s < faint + 60 and e > faint for s, e in p.review)  # 그 1분과 겹치는 창
+    m = trim.OffsetMap(p.keep)
+    assert trim.meta(p, m)["review"]
+    assert not trim.plan(profile(("s", 600), ("n", 1800), ("s", 600))).review  # 드문 튐만 있으면 없음

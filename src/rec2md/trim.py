@@ -59,12 +59,16 @@ def threshold(db: np.ndarray) -> float:
     return float(np.clip(np.percentile(db, FLOOR_PCT) + MARGIN, T_MIN, T_MAX))
 
 
+REVIEW_FRAC = ACTIVE_FRAC / 2  # 잘라낸 구간 중 이만큼 소리가 있던 1분 창이 있으면 "다시 들어 볼 구간"
+
+
 @dataclass
 class Plan:
     keep: list[tuple[float, float]]   # 남길 구간(원본 초)
     cut: list[tuple[float, float]]    # 잘라낼 구간(원본 초)
     duration: float
     threshold: float
+    review: list[tuple[float, float]] = None  # 잘라냈지만 약한 소리가 있던 1분 창(원본 초)
 
     @property
     def kept_sec(self) -> float:
@@ -92,7 +96,7 @@ def plan(db: np.ndarray, min_gap: float = MIN_GAP) -> Plan:
         else:
             keep.append((s, e))
     if not keep:  # 말소리를 못 찾으면 자르지 않는다(판정을 믿지 않는 편이 안전)
-        return Plan([(0.0, dur)], [], dur, t)
+        return Plan([(0.0, dur)], [], dur, t, [])
     # 처음·끝의 짧은 무음은 남긴다 — 앞뒤도 min_gap 이상일 때만 자른다
     if keep[0][0] < min_gap:
         keep[0] = (0.0, keep[0][1])
@@ -105,7 +109,21 @@ def plan(db: np.ndarray, min_gap: float = MIN_GAP) -> Plan:
         prev = e
     if prev < dur:
         cut.append((prev, dur))
-    return Plan(keep, cut, dur, t)
+    return Plan(keep, cut, dur, t, _review(active, cut))
+
+
+def _review(active: np.ndarray, cut: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """잘라낸 구간 안에서 말소리 기준의 절반 이상 소리가 있던 1분 창. 먼 말소리일 수 있어 사람이 들어 볼 후보."""
+    out: list[tuple[float, float]] = []
+    for s, e in cut:
+        for w0 in range(int(s), int(e), WINDOW):
+            w1 = min(int(e), w0 + WINDOW)
+            if w1 - w0 >= WINDOW // 2 and active[w0:w1].mean() >= REVIEW_FRAC:
+                if out and out[-1][1] >= w0:
+                    out[-1] = (out[-1][0], float(w1))
+                else:
+                    out.append((float(w0), float(w1)))
+    return out
 
 
 class OffsetMap:
@@ -150,4 +168,5 @@ def remap_spans(spans: list[tuple], m: OffsetMap) -> list[tuple]:
 
 def meta(p: Plan, m: OffsetMap) -> dict:
     return {"threshold_db": round(p.threshold, 1), "min_gap": MIN_GAP, "kept_sec": round(p.kept_sec, 1),
-            "cut": [[round(s, 1), round(e, 1)] for s, e in p.cut], "offsets": m.table()}
+            "cut": [[round(s, 1), round(e, 1)] for s, e in p.cut],
+            "review": [[round(s, 1), round(e, 1)] for s, e in p.review or []], "offsets": m.table()}

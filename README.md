@@ -43,7 +43,7 @@ uv tool install --editable '.[diarize,render,export,office]'
 | `rec2md notes <segments.json> <메모>` | 회의 메모 문단마다 녹취 근거 구간 후보 → 에이전트가 메모 보정본 작성 | 동작 |
 | `rec2md render --kind transcript ...` | segments.json → 클로바노트식 녹취록 (txt·md·html) | 작업 중 |
 | `rec2md voices ...` | 목소리 등록, 새 녹취에 실명 자동 태깅 | 동작 |
-| `rec2md batch <폴더>` | 폴더 일괄 전사, `--dry-run`, 중단 후 이어서 | 예정 |
+| `rec2md batch <폴더>` | 폴더 일괄 전사, `--dry-run`(길이·추정 말소리 길이·예상 시간), 중단 후 이어서 | 동작 |
 | `rec2md review <segments.json>` | 문장 클릭 재생 + 화자 고치기 (이 맥에서만 열리는 웹 화면) | 동작 |
 | `rec2md review --queue <cases.json>` | 사례를 하나씩 듣고 판정 → `answers.json` (평가 정답) | 동작 |
 
@@ -53,6 +53,14 @@ uv tool install --editable '.[diarize,render,export,office]'
 rec2md meeting.m4a                 # → meeting.segments.json, meeting.raw.md
 rec2md call.mp3 --speakers 2       # 화자 수를 알면 지정
 rec2md talk.mov --no-diarize       # 영상도 됨, 화자분리 생략
+rec2md long.mp3 --no-trim          # 긴 무음을 자르지 않고 그대로 처리
+```
+
+녹음기를 끄지 않아 뒤에 몇 시간씩 붙은 무음은 **전사 전에 잘라낸다.** 소리 크기로 5분 이상 조용한 구간을 찾아 빼고 말소리 구간만 이어 붙여 화자분리·전사하며, 결과의 시각은 원본 녹음 기준이다. 잘라낸 구간은 `segments.json`의 `meta.trim.cut`에, 그중 약한 소리가 있어 다시 들어 볼 만한 구간은 `meta.trim.review`에 남는다. 아주 작게 말한 부분까지 잘릴까 걱정되면 `--no-trim`으로 끈다(시간·메모리는 더 든다).
+
+```sh
+rec2md batch ~/녹음 --dry-run      # 파일별 길이·추정 말소리 길이·판정·예상 처리시간만 보기
+rec2md batch ~/녹음                # 차례로 전사 → ~/녹음/_transcripts/, 중단 후 같은 명령으로 이어서
 ```
 
 ### 맥락 보정 (회의 시리즈 용어집)
