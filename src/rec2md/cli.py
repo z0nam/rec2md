@@ -74,6 +74,10 @@ def run_one(src: Path, args) -> Path:
 
     t = Transcript(source=src.name, duration=duration, engine=f"{engine.name}:{getattr(engine, 'model', '')}",
                    language=args.language, segments=segs, meta=meta)
+    from .bounds import estimate, summary
+    meta["meeting_bounds"] = estimate(t)
+    if meta["meeting_bounds"]["confidence"] != "none":
+        log(f"회의 구간 추정 {summary(meta['meeting_bounds'], duration)}")
     if turns is not None and embs and rename:  # 전사된 말이 없으면 화자N도 없어 사이드카를 만들 수 없다
         _voices(t, seg_path, embs, seg_embs, turns, rename, args)
     t.to_json(seg_path)
@@ -97,7 +101,7 @@ def _voices(t: Transcript, seg_path: Path, embs: dict, seg_embs: list, turns: li
 
 
 # `rec2md <서브커맨드> ...`는 rec2md.cmd_<이름>.main(argv)로 넘긴다. 그 외 인자는 전사 대상 파일
-SUBCOMMANDS = {"voices", "render", "series"}
+SUBCOMMANDS = {"voices", "render", "series", "bounds"}
 
 
 def main(argv: list[str] | None = None) -> None:
