@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from . import voices
+from . import speakers, voices
 from .render import render_raw
 from .segments import Transcript
 
@@ -95,11 +95,7 @@ def main(argv: list[str]) -> None:
             raise SystemExit(f"이 녹취에 없는 화자: {', '.join(bad)} (있는 화자: {', '.join(sorted(known))})")
         if not mapping and not unset:
             raise SystemExit("--map 또는 --unset을 줘야 함")
-        names = dict(t.meta.get("speaker_names") or {})
-        for lb in unset:
-            names.pop(lb, None)
-        names.update({lb: {"name": nm, "source": "user"} for lb, nm in mapping.items()})
-        t.meta["speaker_names"] = names
+        t.meta["speaker_names"] = speakers.set_user_names(t.meta.get("speaker_names") or {}, mapping, unset)
         _save_and_show(t, args.segments)
         return
 

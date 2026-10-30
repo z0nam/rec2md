@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rec2md 검토</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1d2129; --muted: #7a8190; --line: #e4e7ec; --soft: #f4f6f9;
+    --accent: #2f6fde; --accent-fg: #ffffff; --hl: #eaf1fd; --warn: #b45309; --shadow: 0 6px 24px rgba(16,24,40,.14);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #15171c; --fg: #e6e8ec; --muted: #8b93a1; --line: #2b2f37; --soft: #1d2027;
+            --accent: #5b8ff0; --accent-fg: #0d1117; --hl: #1d2a42; --warn: #f0a050; --shadow: 0 6px 24px rgba(0,0,0,.5); }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.6 -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif; }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line);
+    padding: 14px 20px 10px; display: flex; gap: 12px; align-items: flex-end; justify-content: space-between; }
+  header h1 { font-size: 18px; margin: 0; word-break: break-all; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  .tools { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+  .btn { border: 1px solid var(--line); border-radius: 8px; padding: 4px 12px; }
+  .btn:hover { background: var(--soft); }
+  .btn:disabled { opacity: .4; cursor: default; }
+  .btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  .status { color: var(--muted); font-size: 13px; min-width: 6em; text-align: right; }
+  .status.err { color: var(--warn); }
+  main { max-width: 860px; margin: 0 auto; padding: 8px 20px 160px; }
+  .seg { display: grid; grid-template-columns: 36px 1fr; gap: 4px 12px; padding: 10px 8px; border-radius: 10px; }
+  .seg.cur { background: var(--hl); }
+  .seg.browse { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .av { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: #fff;
+    font-size: 13px; font-weight: 600; margin-top: 2px; user-select: none; }
+  .who { display: flex; gap: 8px; align-items: baseline; }
+  .who .name { font-weight: 700; padding: 0 2px; border-radius: 4px; }
+  .who .name:hover { background: var(--soft); text-decoration: underline; }
+  .who .ts { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .text { grid-column: 2; cursor: pointer; white-space: pre-wrap; word-break: keep-all; overflow-wrap: anywhere; }
+  .empty { color: var(--muted); padding: 40px 0; text-align: center; }
+
+  /* 화자 변경 팝오버 */
+  .pop { position: absolute; z-index: 20; width: 300px; max-width: calc(100vw - 24px); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 14px; }
+  .pop h3 { margin: 0 0 10px; font-size: 15px; display: flex; justify-content: space-between; }
+  .pop input[type=text] { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg); color: var(--fg); font: inherit; }
+  .plist { max-height: 180px; overflow: auto; margin: 8px 0; }
+  .pitem { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px; border-radius: 8px; text-align: left; }
+  .pitem:hover, .pitem.sel { background: var(--soft); }
+  .pitem .av { width: 26px; height: 26px; font-size: 12px; margin: 0; }
+  .pitem .lb { color: var(--muted); font-size: 12px; margin-left: auto; }
+  .pitem .chk { width: 1em; color: var(--accent); }
+  .scopes { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
+  .scopes label { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
+  .impact { color: var(--muted); font-size: 12px; margin: 4px 0 10px 24px; min-height: 1.2em; }
+  .impact.big { color: var(--warn); }
+  .pop .row { display: flex; justify-content: flex-end; gap: 8px; }
+
+  /* 훑어보기 막대, 재생 위치로 이동 */
+  .browsebar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 96px; z-index: 6;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 999px; box-shadow: var(--shadow);
+    padding: 4px 8px 4px 14px; display: none; gap: 6px; align-items: center; font-size: 14px; white-space: nowrap; }
+  .browsebar.on { display: flex; }
+  .pill { position: fixed; left: 50%; transform: translateX(-50%); bottom: 96px; z-index: 6; display: none;
+    background: var(--accent); color: var(--accent-fg); border-radius: 999px; padding: 6px 16px; box-shadow: var(--shadow); }
+  .pill.on { display: block; }
+  .browsebar.on ~ .pill.on { bottom: 140px; }
+
+  /* 재생 바 */
+  .player { position: fixed; left: 0; right: 0; bottom: 0; z-index: 7; background: var(--bg); border-top: 1px solid var(--line); }
+  .bar { height: 6px; background: var(--soft); cursor: pointer; position: relative; }
+  .bar .fill { position: absolute; inset: 0 auto 0 0; background: var(--accent); width: 0; }
+  .bar .mark { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 30%, transparent); }
+  .ctrl { display: flex; align-items: center; justify-content: space-between; padding: 8px 20px 12px;
+    max-width: 860px; margin: 0 auto; font-variant-numeric: tabular-nums; }
+  .ctrl .mid { display: flex; align-items: center; gap: 14px; }
+  .ctrl .play { width: 44px; height: 44px; border-radius: 50%; background: var(--accent); color: var(--accent-fg);
+    display: grid; place-items: center; font-size: 18px; }
+  .ctrl .t { color: var(--muted); font-size: 13px; min-width: 5.5em; }
+  .ctrl .t.r { text-align: right; }
+  .ctrl .spd { min-width: 3.2em; border: 1px solid var(--line); border-radius: 8px; padding: 2px 6px; font-size: 13px; }
+  .noaudio { color: var(--warn); font-size: 13px; text-align: center; padding: 4px; }
+
+  /* 판정 모드 */
+  .card { border: 1px solid var(--line); border-radius: 14px; padding: 20px; margin-top: 16px; }
+  .card .meta { color: var(--muted); font-size: 13px; display: flex; justify-content: space-between; }
+  .card h2 { font-size: 20px; margin: 8px 0 14px; }
+  .ctx { display: grid; grid-template-columns: 5em 1fr; gap: 6px 10px; background: var(--soft); border-radius: 10px;
+    padding: 10px 12px; margin-bottom: 16px; font-size: 14px; }
+  .ctx b { color: var(--muted); font-weight: 600; }
+  .opts { display: grid; gap: 8px; }
+  .opt { display: flex; gap: 12px; align-items: center; border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 14px; text-align: left; }
+  .opt:hover { background: var(--soft); }
+  .opt.on { border-color: var(--accent); background: var(--hl); }
+  .opt kbd { min-width: 1.6em; text-align: center; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; padding: 1px 4px; }
+  .free { display: flex; gap: 8px; margin-top: 8px; }
+  .free input { flex: 1; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; }
+  .nav { display: flex; justify-content: space-between; margin-top: 16px; }
+  .help { color: var(--muted); font-size: 12px; margin-top: 12px; }
+  @media (max-width: 560px) {
+    header { flex-direction: column; align-items: stretch; }
+    .ctrl { padding: 8px 12px 12px; }
+    main { padding: 8px 12px 160px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 id="title">불러오는 중…</h1>
+    <div class="sub" id="sub"></div>
+  </div>
+  <div class="tools">
+    <span class="status" id="status"></span>
+    <button class="btn" id="undo" title="되돌리기 (⌘Z)" hidden>되돌리기</button>
+  </div>
+</header>
+<main id="main"></main>
+<div class="browsebar" id="browsebar">
+  <span id="browselabel"></span>
+  <button class="btn" id="bprev" title="이전 구간">◀</button>
+  <span id="browsepos"></span>
+  <button class="btn" id="bnext" title="다음 구간">▶</button>
+  <button class="btn" id="bclose" title="닫기">✕</button>
+</div>
+<button class="pill" id="pill">재생 위치로 이동</button>
+<div class="player">
+  <div class="bar" id="bar"><div class="mark" id="mark" hidden></div><div class="fill" id="fill"></div></div>
+  <div class="noaudio" id="noaudio" hidden>오디오를 찾지 못해 재생할 수 없음 (rec2md review … --audio &lt;파일&gt;)</div>
+  <div class="ctrl">
+    <span class="t" id="cur">00:00</span>
+    <div class="mid">
+      <button class="spd" id="spd" title="배속">1x</button>
+      <button id="back" title="5초 뒤로 (←)">⟲5</button>
+      <button class="play" id="play" title="재생/정지 (Space)">▶</button>
+      <button id="fwd" title="5초 앞으로 (→)">⟳5</button>
+    </div>
+    <span class="t r" id="dur">00:00</span>
+  </div>
+</div>
+<audio id="audio" preload="metadata"></audio>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const audio = $("audio");
+const SPEEDS = [1, 1.25, 1.5, 2, 0.75];
+const COLORS = ["#4f7cf0", "#e0763a", "#2f9e6e", "#b45fc6", "#d14d6b", "#3a9db5", "#8a7b3a", "#6b6fd6", "#c2803a", "#4a8f4a"];
+let S = null;            // 서버 상태
+let curIdx = -1;         // 재생 중인 세그먼트
+let autoScroll = true;
+let browse = null;       // {label, pos}
+let stopAt = null;       // 훑어보기·판정: 이 시각에 멈춤
+let caseIdx = 0;
+let pop = null;
+
+function fmt(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  const p = (x) => String(x).padStart(2, "0");
+  return h ? `${h}:${p(m)}:${p(s)}` : `${p(m)}:${p(s)}`;
+}
+function fmtLen(sec) {
+  sec = Math.round(sec || 0);
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return m ? `${m}분 ${s}초` : `${s}초`;
+}
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids) if (k != null) e.append(k);
+  return e;
+}
+function setStatus(msg, err = false) {
+  const s = $("status");
+  s.textContent = msg;
+  s.className = "status" + (err ? " err" : "");
+}
+function color(label) {
+  let h = 0;
+  for (const c of label || "") h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  const m = /(\d+)$/.exec(label || "");
+  return COLORS[(m ? Number(m[1]) : h) % COLORS.length];
+}
+function avatar(label, name) {
+  const named = name && name !== label;
+  const txt = named ? name.replace(/\?$/, "").slice(0, 1) : ((/(\d+)$/.exec(label || "") || [, "?"])[1]);
+  return el("div", { class: "av", style: `background:${color(label)}` }, txt);
+}
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+
+// ---------- 재생 바 ----------
+function togglePlay() {
+  if (!S || !S.audio) return;
+  if (audio.paused) { stopAt = null; audio.play(); } else audio.pause();
+}
+function seek(t, play = true) {
+  if (!S || !S.audio) return;
+  stopAt = null;   // 훑어보기·판정의 "여기서 멈춤"은 그쪽이 seek 뒤에 다시 건다
+  audio.currentTime = Math.max(0, t);
+  if (play) audio.play();
+}
+$("play").onclick = togglePlay;
+$("back").onclick = () => seek(audio.currentTime - 5, !audio.paused);
+$("fwd").onclick = () => seek(audio.currentTime + 5, !audio.paused);
+$("spd").onclick = () => {
+  const i = (SPEEDS.indexOf(audio.playbackRate) + 1) % SPEEDS.length;
+  audio.playbackRate = SPEEDS[i];
+  $("spd").textContent = SPEEDS[i] + "x";
+};
+$("bar").onclick = (ev) => {
+  const r = $("bar").getBoundingClientRect();
+  const d = audio.duration || (S && S.duration) || 0;
+  seek(d * (ev.clientX - r.left) / r.width, !audio.paused);
+};
+audio.addEventListener("play", () => $("play").textContent = "❚❚");
+audio.addEventListener("pause", () => $("play").textContent = "▶");
+audio.addEventListener("loadedmetadata", () => $("dur").textContent = fmt(audio.duration));
+audio.addEventListener("timeupdate", () => {
+  const t = audio.currentTime, d = audio.duration || (S && S.duration) || 1;
+  $("cur").textContent = fmt(t);
+  $("fill").style.width = (100 * t / d) + "%";
+  if (stopAt !== null && t >= stopAt) { audio.pause(); stopAt = null; }
+  if (S && S.mode === "transcript") track(t);
+});
+
+// ---------- 녹취록 ----------
+function segAt(t) {
+  const segs = S.segments;
+  let lo = 0, hi = segs.length - 1, ans = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (segs[mid].start <= t) { ans = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return ans;
+}
+function segEl(i) { return document.querySelector(`.seg[data-i="${i}"]`); }
+function inView(e) {
+  const r = e.getBoundingClientRect();
+  return r.top >= 70 && r.bottom <= window.innerHeight - 90;
+}
+function track(t) {
+  const i = segAt(t);
+  if (i !== curIdx) {
+    const old = segEl(curIdx);
+    if (old) old.classList.remove("cur");
+    curIdx = i;
+    const e = segEl(i);
+    if (e) {
+      e.classList.add("cur");
+      if (autoScroll && !audio.paused) e.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }
+  const e = segEl(curIdx);
+  $("pill").classList.toggle("on", !!e && !audio.paused && !autoScroll && !inView(e));
+}
+// 사용자가 직접 스크롤하면 자동 스크롤을 잠시 끈다
+for (const evName of ["wheel", "touchmove"]) window.addEventListener(evName, () => { autoScroll = false; }, { passive: true });
+$("pill").onclick = () => {
+  autoScroll = true;
+  const e = segEl(curIdx);
+  if (e) e.scrollIntoView({ block: "center", behavior: "smooth" });
+  $("pill").classList.remove("on");
+};
+
+function renderTranscript() {
+  const main = $("main");
+  main.replaceChildren();
+  if (!S.segments.length) { main.append(el("div", { class: "empty" }, "세그먼트가 없음")); return; }
+  const frag = document.createDocumentFragment();
+  for (const s of S.segments) {
+    const name = s.name || s.speaker || "";
+    frag.append(el("div", { class: "seg" + (s.i === curIdx ? " cur" : ""), "data-i": s.i },
+      avatar(s.speaker, name),
+      el("div", { class: "who" },
+        el("button", { class: "name", title: "화자 변경", onclick: (ev) => openPop(s, ev.currentTarget) }, name || "화자 없음"),
+        el("button", { class: "ts", onclick: () => playSeg(s.i) }, fmt(s.start))),
+      el("div", { class: "text", onclick: () => playSeg(s.i) }, s.text)));
+  }
+  main.append(frag);
+  if (browse) showBrowse(); else clearBrowse();
+  $("sub").textContent = [S.date, S.duration ? fmtLen(S.duration) : "", `${S.speakers.length}명`].filter(Boolean).join(" · ");
+  $("undo").hidden = false;
+  $("undo").disabled = !S.edits;
+}
+function playSeg(i) {
+  autoScroll = true;
+  seek(S.segments[i].start, true);
+}
+
+// ---------- 화자 변경 팝오버 ----------
+function closePop() { if (pop) { pop.remove(); pop = null; } }
+function affected(scope, seg) {
+  const segs = S.segments, from = segs[seg].speaker;
+  let idx;
+  if (scope === "one") idx = [seg];
+  else idx = segs.filter((x) => x.speaker === from && (scope === "all" || x.i >= seg)).map((x) => x.i);
+  const sec = idx.reduce((a, i) => a + Math.max(0, segs[i].end - segs[i].start), 0);
+  return { n: idx.length, sec };
+}
+function openPop(s, anchor) {
+  closePop();
+  let target = null;           // {label} 또는 {name}
+  const input = el("input", { type: "text", placeholder: "이름 직접 입력", autocomplete: "off" });
+  const list = el("div", { class: "plist" });
+  for (const sp of S.speakers) {
+    const item = el("button", { class: "pitem" + (sp.label === s.speaker ? " sel" : ""),
+      onclick: () => { target = { label: sp.label }; input.value = "";
+        list.querySelectorAll(".pitem").forEach((x) => x.classList.remove("sel")); item.classList.add("sel"); refresh(); } },
+      el("span", { class: "chk" }, sp.label === s.speaker ? "✓" : ""), avatar(sp.label, sp.name),
+      el("span", {}, sp.name), sp.name !== sp.label ? el("span", { class: "lb" }, sp.label) : null);
+    list.append(item);
+  }
+  const scopes = el("div", { class: "scopes" });
+  const labels = { one: "이 구간만", after: "이 구간부터", all: "전체" };
+  for (const sc of ["one", "after", "all"]) {
+    scopes.append(el("label", {}, el("input", { type: "radio", name: "scope", value: sc, checked: sc === "one",
+      onchange: refresh }), labels[sc]));
+  }
+  const impact = el("div", { class: "impact" });
+  const ok = el("button", { class: "btn primary", onclick: submit }, "변경");
+  pop = el("div", { class: "pop", role: "dialog", "aria-label": "화자 변경" },
+    el("h3", {}, "화자 변경", el("button", { title: "닫기", onclick: closePop }, "✕")),
+    input, list, scopes, impact, el("div", { class: "row" }, ok));
+  document.body.append(pop);
+  const r = anchor.getBoundingClientRect();
+  pop.style.top = (window.scrollY + r.bottom + 6) + "px";
+  pop.style.left = Math.max(12, Math.min(window.scrollX + r.left, window.scrollX + window.innerWidth - pop.offsetWidth - 12)) + "px";
+  input.addEventListener("input", () => { target = input.value.trim() ? { name: input.value.trim() } : null;
+    list.querySelectorAll(".pitem").forEach((x) => x.classList.remove("sel")); refresh(); });
+  input.addEventListener("keydown", (ev) => { if (ev.key === "Enter") submit(); if (ev.key === "Escape") closePop(); });
+  input.focus();
+  refresh();
+
+  function scope() { return pop.querySelector("input[name=scope]:checked").value; }
+  function refresh() {
+    const a = affected(scope(), s.i);
+    const who = s.name && s.name !== s.speaker ? `${s.name}(${s.speaker})` : s.speaker;
+    impact.textContent = `${who} ${a.n}개 구간 · ${fmtLen(a.sec)}에 적용`;
+    impact.classList.toggle("big", scope() !== "one" && a.n > 1);
+    ok.disabled = !target || (target.label && target.label === s.speaker);
+  }
+  async function submit() {
+    if (ok.disabled) return;
+    const sc = scope();
+    const edit = { op: "set_speaker", scope: sc, seg: s.i, from: s.speaker, to: target.label || { name: target.name } };
+    try {
+      S = await api("/api/edit", edit);
+      closePop();
+      setStatus("저장됨");
+      // 바꾼 화자의 구간을 바로 훑어볼 수 있게 한다 (섞인 사람 찾기)
+      if (sc !== "one") {
+        browse = { label: S.segments[s.i].speaker, pos: 0 };
+        browse.pos = Math.max(0, browseList().indexOf(s.i));
+      }
+      renderTranscript();
+    } catch (e) { setStatus("저장 실패: " + e.message, true); }
+  }
+}
+document.addEventListener("mousedown", (ev) => {
+  if (pop && !pop.contains(ev.target) && !(ev.target instanceof Element && ev.target.closest(".name"))) closePop();
+});
+
+// ---------- 이 화자 구간 훑어보기 ----------
+function browseList() { return browse ? S.segments.filter((x) => x.speaker === browse.label).map((x) => x.i) : []; }
+function clearBrowse() {
+  browse = null;
+  $("browsebar").classList.remove("on");
+  document.querySelectorAll(".seg.browse").forEach((x) => x.classList.remove("browse"));
+}
+function showBrowse() {
+  const idx = browseList();
+  if (!idx.length) { clearBrowse(); return; }
+  browse.pos = Math.min(browse.pos, idx.length - 1);
+  const sp = S.speakers.find((x) => x.label === browse.label);
+  $("browselabel").textContent = `${sp ? sp.name : browse.label} 구간 훑어보기`;
+  $("browsepos").textContent = `${browse.pos + 1}/${idx.length}`;
+  $("browsebar").classList.add("on");
+  document.querySelectorAll(".seg.browse").forEach((x) => x.classList.remove("browse"));
+  const e = segEl(idx[browse.pos]);
+  if (e) e.classList.add("browse");
+}
+function browseGo(d) {
+  const idx = browseList();
+  if (!idx.length) { clearBrowse(); return; }
+  browse.pos = (browse.pos + d + idx.length) % idx.length;
+  showBrowse();
+  const i = idx[browse.pos];
+  autoScroll = true;
+  segEl(i).scrollIntoView({ block: "center", behavior: "smooth" });
+  if (S.audio) { seek(S.segments[i].start, true); stopAt = S.segments[i].end; }
+}
+$("bprev").onclick = () => browseGo(-1);
+$("bnext").onclick = () => browseGo(1);
+$("bclose").onclick = clearBrowse;
+
+$("undo").onclick = async () => {
+  try { S = await api("/api/undo", {}); setStatus("되돌림"); renderTranscript(); }
+  catch (e) { setStatus("되돌리기 실패: " + e.message, true); }
+};
+
+// ---------- 판정 모드 ----------
+function cases() { return S.cases; }
+function playCase() {
+  const c = cases()[caseIdx];
+  if (!c || !S.audio) return;
+  seek(Math.max(0, c.start - 1), true);
+  stopAt = c.end + 1;
+  const d = audio.duration || S.duration || 0;
+  if (d) {
+    const m = $("mark");
+    m.hidden = false;
+    m.style.left = (100 * c.start / d) + "%";
+    m.style.width = (100 * (c.end - c.start) / d) + "%";
+  }
+}
+function renderCase(autoplay = true) {
+  const main = $("main");
+  main.replaceChildren();
+  const cs = cases();
+  if (!cs.length) { main.append(el("div", { class: "empty" }, "사례가 없음")); return; }
+  caseIdx = Math.max(0, Math.min(caseIdx, cs.length - 1));
+  const c = cs[caseIdx], ans = S.answers[c.id];
+  const done = Object.keys(S.answers).length;
+  $("sub").textContent = `${done}/${cs.length} 답함`;
+  const opts = el("div", { class: "opts" });
+  for (const o of c.options || []) {
+    opts.append(el("button", { class: "opt" + (ans && ans.key === o.key ? " on" : ""), onclick: () => answer({ key: o.key }) },
+      el("kbd", {}, o.key), o.label));
+  }
+  opts.append(el("button", { class: "opt" + (ans && ans.unsure ? " on" : ""), onclick: () => answer({ unsure: true }) },
+    el("kbd", {}, "0"), "모르겠음"));
+  let free = null;
+  if (c.allow_text) {
+    const inp = el("input", { type: "text", placeholder: "직접 입력", value: ans && ans.text ? ans.text : "" });
+    inp.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter" && inp.value.trim()) answer({ text: inp.value.trim() }); });
+    free = el("div", { class: "free" }, inp, el("button", { class: "btn", onclick: () => inp.value.trim() && answer({ text: inp.value.trim() }) }, "저장"));
+  }
+  const ctx = c.context ? el("div", { class: "ctx" },
+    ...Object.entries(c.context).flatMap(([k, v]) => [el("b", {}, k), el("span", {}, String(v))])) : null;
+  main.append(el("div", { class: "card" },
+    el("div", { class: "meta" }, el("span", {}, `${caseIdx + 1}/${cs.length} · ${c.id} · ${c.kind || ""}`),
+      el("span", {}, `${fmt(c.start)}–${fmt(c.end)}`)),
+    el("h2", {}, c.question || ""), ctx, opts, free,
+    el("div", { class: "nav" },
+      el("button", { class: "btn", onclick: () => go(-1), disabled: caseIdx === 0 }, "이전 사례"),
+      el("button", { class: "btn", onclick: playCase }, "다시 듣기 (R)"),
+      el("button", { class: "btn", onclick: () => go(1), disabled: caseIdx === cs.length - 1 }, "다음 사례")),
+    el("div", { class: "help" }, "숫자 키로 답, 0 모르겠음, R 다시 듣기, ↑/↓ 이전·다음 사례, Space 재생/정지. 답은 바로 저장됨")));
+  if (autoplay) playCase();
+}
+function go(d) { if (answering) return; caseIdx += d; renderCase(); }
+let answering = false;
+async function answer(a) {
+  if (answering) return;            // 두 번 누르거나 키를 연달아 쳐도 한 번만 보낸다
+  const at = caseIdx, c = cases()[at];
+  answering = true;
+  try {
+    S = await api("/api/answer", { id: c.id, key: a.key ?? null, text: a.text ?? null, unsure: !!a.unsure });
+    setStatus("저장됨");
+    if (caseIdx !== at) return;     // 기다리는 사이 사용자가 다른 사례로 옮겼으면 그 자리를 지킨다
+    if (at < cases().length - 1) { caseIdx = at + 1; renderCase(); } else renderCase(false);
+  } catch (e) { setStatus("저장 실패: " + e.message, true); }
+  finally { answering = false; }
+}
+
+// ---------- 단축키 ----------
+document.addEventListener("keydown", (ev) => {
+  const typing = ev.target instanceof Element && ev.target.closest("input, textarea");
+  if (typing) return;
+  if (ev.metaKey || ev.ctrlKey) {   // ⌘Z / Ctrl+Z만 받고 나머지 조합키는 브라우저에 맡긴다
+    if (ev.key === "z" && S && S.mode === "transcript") { ev.preventDefault(); $("undo").click(); }
+    return;
+  }
+  if (ev.key === "Escape") { closePop(); return; }
+  if (ev.key === " ") { ev.preventDefault(); togglePlay(); return; }
+  if (ev.key === "ArrowLeft") { ev.preventDefault(); seek(audio.currentTime - 5, !audio.paused); return; }
+  if (ev.key === "ArrowRight") { ev.preventDefault(); seek(audio.currentTime + 5, !audio.paused); return; }
+  if (!S) return;
+  if (S.mode === "transcript") {
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      ev.preventDefault();
+      const i = Math.max(0, Math.min(S.segments.length - 1, (curIdx < 0 ? -1 : curIdx) + (ev.key === "ArrowDown" ? 1 : -1)));
+      playSeg(i);
+      segEl(i).scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  } else {
+    if (ev.key === "ArrowDown" && caseIdx < cases().length - 1) { ev.preventDefault(); go(1); }
+    else if (ev.key === "ArrowUp" && caseIdx > 0) { ev.preventDefault(); go(-1); }
+    else if (ev.key === "r" || ev.key === "R") playCase();
+    else if (ev.key === "0") answer({ unsure: true });
+    else {
+      const c = cases()[caseIdx];
+      if (c && (c.options || []).some((o) => o.key === ev.key)) answer({ key: ev.key });
+    }
+  }
+});
+
+// ---------- 시작 ----------
+(async () => {
+  try { S = await api("/api/state"); }
+  catch (e) { $("title").textContent = "불러오기 실패"; setStatus(e.message, true); return; }
+  document.title = S.title + " · rec2md";
+  $("title").textContent = S.title;
+  if (S.audio) audio.src = "/audio"; else $("noaudio").hidden = false;
+  if (S.notice) setStatus(S.notice, true);
+  $("dur").textContent = fmt(S.duration || 0);
+  if (S.mode === "transcript") {
+    renderTranscript();
+  } else {
+    // 이어서 하기: 처음으로 답하지 않은 사례부터
+    const first = S.cases.findIndex((c) => !S.answers[c.id]);
+    caseIdx = first < 0 ? 0 : first;
+    renderCase(false);   // 브라우저는 사용자 조작 전 자동 재생을 막으므로 첫 사례는 R이나 버튼으로 듣는다
+  }
+})();
+</script>
+</body>
+</html>
