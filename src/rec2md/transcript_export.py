@@ -134,7 +134,10 @@ def render_clova_txt(
     ]
     for turn in turns:
         lines.append(f"{turn.speaker} {format_ts(turn.start)}")
-        lines.append(turn.text)
+        for subline in turn.text.splitlines():
+            sline = subline.strip()
+            if sline:
+                lines.append(sline)
         lines.append("")
     return "\n".join(lines)
 

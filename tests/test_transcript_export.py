@@ -204,3 +204,33 @@ def test_format_variations_and_empty_segments(tmp_path):
     content = ws_out.read_text(encoding="utf-8")
     assert "유효 발화" in content
     assert content.count("**참석자 1**") == 1
+
+
+def test_utterance_matching_speaker_header_regression(tmp_path):
+    """발화 내용이 '이름 시간'(예: 다음 회의 10:00) 꼴이어도 화자 헤더로 오인되지 않는지 검증."""
+    segs = [
+        Segment(start=0.0, end=15.0, text="다음 회의 10:00", speaker="화자1"),
+        Segment(start=15.0, end=30.0, text="네 10시에 뵙겠습니다.", speaker="화자2"),
+    ]
+    t = Transcript(
+        source="test.wav",
+        duration=30.0,
+        engine="test",
+        language="ko",
+        segments=segs,
+        meta={"title": "일정 회의"},
+    )
+    out_file = tmp_path / "test_disambiguate.txt"
+    export_transcript(t, "txt", out_file)
+
+    parsed = clova_txt.parse(out_file)
+    assert len(parsed.segments) == 2
+    assert parsed.segments[0].speaker == "참석자 1"
+    assert parsed.segments[0].text == "다음 회의 10:00"
+    assert parsed.segments[0].start == 0.0
+    assert parsed.segments[0].end == 15.0
+    assert parsed.segments[1].speaker == "참석자 2"
+    assert parsed.segments[1].text == "네 10시에 뵙겠습니다."
+    assert parsed.segments[1].start == 15.0
+    assert parsed.segments[1].end == 30.0
+
