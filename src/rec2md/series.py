@@ -140,7 +140,7 @@ _VERBAL = re.compile(r"(요|다|데|면|서|게|지|까|죠|고|던|된|한|할|
 
 
 def _looks_term(w: str) -> bool:
-    if re.search(r"[A-Za-z]", w):  # 약어·영문 섞인 이름(JDC, AI허브)은 짧아도 남긴다
+    if re.search(r"[A-Za-z]", w):  # 약어·영문 섞인 이름(ABC, AI허브)은 짧아도 남긴다
         return True
     # 한글 2음절은 일반 낱말이 대부분이라 뺀다. 2음절 인명·기관명은 용어집에 직접 적는다
     return len(w) >= 3 and not _VERBAL.search(w) and not w.isdigit()

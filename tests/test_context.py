@@ -66,9 +66,9 @@ def test_build_prompt_respects_budget():
 
 
 def test_extract_terms_skips_function_words():
-    text = "탐라데이터센터 구축. 탐라데이터센터는 중요함. 그러니까 그러니까 되는데 되는데 JDC JDC"
+    text = "탐라데이터센터 구축. 탐라데이터센터는 중요함. 그러니까 그러니까 되는데 되는데 TDX TDX"
     terms = extract_terms(text)
-    assert "탐라데이터센터" in terms and "JDC" in terms
+    assert "탐라데이터센터" in terms and "TDX" in terms
     assert "그러니까" not in terms
     assert "되는데" not in terms
 
