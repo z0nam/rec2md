@@ -82,7 +82,7 @@ def run_one(src: Path, args) -> Path:
 
 
 # `rec2md <서브커맨드> ...`는 rec2md.cmd_<이름>.main(argv)로 넘긴다. 그 외 인자는 전사 대상 파일
-SUBCOMMANDS = {"voices", "render", "series"}
+SUBCOMMANDS = {"voices", "render", "series", "notes"}
 
 
 def main(argv: list[str] | None = None) -> None:

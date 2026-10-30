@@ -77,15 +77,16 @@ rec2md <audio> [--engine local|rtzr|clova]  # 기본 local [--call] [--speakers 
 | 회의록 자동 생성·다형식 내보내기 | 완료 | 에이전트가 `minutes.json` → `rec2md render --template kr-standard\|ji\|<사용자> --format md,html,docx,hwpx --export pdf,png`. 회사 원본은 `~/.config/rec2md/templates/<이름>/` | #9, #13, #14, #16 |
 | 회의 맥락 보정 | 완료 | `rec2md series ...`, `rec2md <audio> --series --context`, `<이름>.corrections.json`. 수치는 아래 "맥락 보정 1차" | #15 |
 | 테스트 기반·CI | 완료 | `uv run pytest`, GitHub Actions(맥·리눅스) | #7 |
+| 회의 메모 보정 | 진행 | `rec2md notes <segments.json> <메모>` → `notes-align.json`(문단별 근거 후보, 녹취에 없는 숫자·용어, 메모가 안 다룬 구간), 에이전트가 `메모.보정.md`. 합성 데이터로만 검증, 실데이터는 같은 회의 메모를 받을 때 | worker-3 |
 | 클로바식 녹취록 내보내기 | 진행 | `rec2md render <segments.json> --kind transcript --format txt,md,html` | #8 (이슈 #6) |
 | 화자 목소리 DB·자동 태깅 | 진행 | `rec2md voices enroll\|match\|list\|rename\|forget`, `meta.speaker_names`(`tentative`, `same_as`, `source: "user"`) | worker-1 |
 | 폴더 일괄 처리 | 진행 | `rec2md batch <dir> --dry-run`, 상태 파일로 이어서 | 이슈 #10 |
 | 검토 화면 | 진행 | `rec2md review <segments.json>`: 클릭 재생, 화자 고치기 | 이슈 #12 |
 
-- 회의 메모 보정은 "자료 → 용어 후보"(`--context`) 부분만 맥락 보정에 흡수됐다. 메모와 녹취를 대조해 빠진 논의·틀린 수치를 표시하는 부분은 아래 위시리스트에 남는다.
+- 회의 메모 보정의 "자료 → 용어 후보" 부분은 맥락 보정(`--context`, `notes --to-series`)이 맡는다. 대조는 `rec2md notes`가 근거 후보를 모으고 에이전트가 판단한다(정렬은 키워드·숫자·인명 겹침, 임베딩 없음).
 
 ## 위시리스트
-- **회의 메모 보정** (2026-10-16 요청, 용어 사전 부분은 맥락 보정으로 완료): 같은 회의에서 타이핑한 정리물(메모·회의록 초안)이 있으면 녹취를 근거로 보정한다.
+- **회의 메모 보정** (2026-10-16 요청 → 진행 중, 위 표): 같은 회의에서 타이핑한 정리물(메모·회의록 초안)이 있으면 녹취를 근거로 보정한다.
   - 메모를 기준 문서로 두고 녹취에서 빠진 논의·결정·수치, 잘못 적힌 발언자·숫자, 메모에만 있고 녹취엔 없는 주장을 표시.
   - 반대로 메모의 인명·용어를 STT 오인식 교정 사전으로 활용(녹취록 품질도 같이 올라감).
   - 형태: `rec2md <audio> --notes <memo.md|docx|hwpx>` → 후처리 단계에서 Claude가 대조. 보정본은 변경 근거(타임스탬프)를 달아 원본 메모와 diff로 볼 수 있게.
