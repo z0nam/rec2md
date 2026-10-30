@@ -1,10 +1,11 @@
 """rec2md review — 녹취록 검토 화면(클릭 재생, 화자 지정)과 판정 모드.
 
-  rec2md review <이름>.segments.json [--audio <원본>] [--port 0] [--no-open]
+  rec2md review <이름>.segments.json [--audio <원본>] [--series <이름>] [--port 0] [--no-open]
   rec2md review --queue <이름>.cases.json [--audio <원본>]
 
 표준 라이브러리 http.server로 127.0.0.1에만 띄운다. 페이지는 단일 HTML(외부 CDN 없음)이고, 오디오는
 HTTP Range(206)로 보내 탐색이 된다. 편집은 한 건마다 저장된다(review.Session). Ctrl-C로 끝낸다.
+옆 파일(요약 md, 메모, corrections.json)은 review.py 첫머리 참고.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
-from .review import Queue, Session
+from .review import MemoConflict, Queue, Session
 
 MAX_BODY = 1 << 20
 CHUNK = 1 << 16
@@ -56,8 +57,8 @@ def parse_range(header: str, size: int) -> tuple[int, int] | None:
 class App:
     """요청 처리기에 넘길 상태: 검토 세션 또는 판정 큐, 그리고 오디오 경로."""
 
-    def __init__(self, session: Session | None, queue: Queue | None, audio: Path | None):
-        self.session, self.queue, self.audio = session, queue, audio
+    def __init__(self, session: Session | None, queue: Queue | None, audio: Path | None, series: str | None = None):
+        self.session, self.queue, self.audio, self.series = session, queue, audio, series
         self.lock = threading.Lock()
 
     def state(self) -> dict:
@@ -96,6 +97,14 @@ def make_handler(app: App):
                     self._json(app.state())
             elif path == "/audio":
                 self._audio()
+            elif app.session and path in ("/api/copy", "/api/panel", "/api/keywords"):
+                with app.lock:
+                    if path == "/api/copy":
+                        self._json({"text": app.session.transcript_txt()})
+                    elif path == "/api/panel":
+                        self._json(app.session.panel())
+                    else:
+                        self._json({"keywords": app.session.keywords(app.series)})
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -151,12 +160,17 @@ def make_handler(app: App):
                         app.session.add(body)
                     elif path == "/api/undo" and app.session:
                         app.session.undo()
+                    elif path == "/api/memo" and app.session:
+                        self._json({"memo": app.session.save_memo(body.get("text"), body.get("base"))})
+                        return
                     elif path == "/api/answer" and app.queue:
                         app.queue.answer(body["id"], body.get("key"), body.get("text"), bool(body.get("unsure")))
                     else:
                         self._json({"error": "없는 API"}, HTTPStatus.NOT_FOUND)
                         return
                     self._json(app.state())
+            except MemoConflict as e:
+                self._json({"error": str(e)}, HTTPStatus.CONFLICT)
             except (ValueError, KeyError, TypeError) as e:
                 self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
 
@@ -182,6 +196,7 @@ def main(argv: list[str]) -> None:
     p.add_argument("segments", nargs="?", type=Path, help="<이름>.segments.json")
     p.add_argument("--queue", type=Path, metavar="CASES", help="판정 모드: <이름>.cases.json")
     p.add_argument("--audio", type=Path, help="원본 오디오 (기본: segments의 source, cases의 audio를 옆에서 찾음)")
+    p.add_argument("--series", help="키워드 칩에 쓸 시리즈 용어집 (기본: corrections.json에 적힌 시리즈)")
     p.add_argument("--port", type=int, default=0, help="포트 (기본 0: 빈 포트)")
     p.add_argument("--no-open", action="store_true", help="브라우저를 열지 않음")
     args = p.parse_args(argv)
@@ -209,7 +224,7 @@ def main(argv: list[str]) -> None:
     elif not audio.is_file():
         raise SystemExit(f"오디오 없음: {audio}")
 
-    httpd = serve(App(session, queue, audio), args.port)
+    httpd = serve(App(session, queue, audio, args.series), args.port)
     url = f"http://127.0.0.1:{httpd.server_address[1]}/"
     log(f"{url} (Ctrl-C로 끝냄)")
     if not args.no_open:

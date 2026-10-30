@@ -13,6 +13,13 @@
   - 사용자가 붙인 이름은 `speakers.user_entry()`로 넣는다. 목소리 DB(`rec2md voices name`,
     `enroll --from-names`)와 같은 계약이고 정의는 speakers.py 한 곳에 있다.
 - `{"op": "set_text", "seg": i, "from": "원문", "to": "수정문"}`
+  - `from`이 지금 문장과 다르면 거절한다(다른 곳에서 바뀐 문장을 덮지 않게). `to`의 줄바꿈·연속 공백은 한 칸으로 줄인다
+  - 문장을 고치면 그 세그먼트의 단어 시각(words)·낮은 확률 구간(low_conf)은 버린다. 고친 글자와 맞지 않는다
+
+화면 옆에 붙는 파일(모두 segments.json과 같은 폴더)
+- `<이름>.녹취록.md` 또는 `<이름>*.요약.md`: 오른쪽 패널 `요약` 탭에 읽기 전용으로 보인다
+- `<이름>.memo.md`: `메모` 탭. 쓰는 대로 저장된다(`rec2md notes`의 메모 입력으로 쓸 수 있다)
+- `<이름>.corrections.json`, 시리즈 용어집: 위쪽 키워드 칩
 """
 
 from __future__ import annotations
@@ -26,7 +33,9 @@ from pathlib import Path
 
 from .render import render_raw
 from .segments import Transcript
+from .series import parse_glossary, series_root
 from .speakers import display_name, is_user, user_entry, user_label_for
+from .transcript_export import render_clova_txt
 
 SCOPES = ("one", "after", "all")
 
@@ -84,6 +93,20 @@ def _set_speaker(t: Transcript, e: dict) -> None:
         t.segments[j].speaker = dst
 
 
+def _set_text(t: Transcript, e: dict) -> None:
+    i, to = int(e["seg"]), e["to"]
+    if not 0 <= i < len(t.segments):
+        raise ValueError(f"세그먼트 번호 범위 밖: {i}")
+    if not isinstance(to, str):
+        raise TypeError("to는 문자열")
+    s = t.segments[i]
+    if "from" in e and e["from"] != s.text:
+        raise ValueError(f"세그먼트 {i}의 문장이 편집 화면에서 본 것과 다름 — 다시 불러올 것")
+    to = " ".join(to.split())
+    if to != s.text:
+        s.text, s.words, s.low_conf = to, [], []
+
+
 def apply_edits(t: Transcript, edits: list[dict]) -> Transcript:
     """원본 t에 편집 로그를 차례로 적용한 새 Transcript. t는 바꾸지 않는다."""
     out = copy.deepcopy(t)
@@ -91,7 +114,7 @@ def apply_edits(t: Transcript, edits: list[dict]) -> Transcript:
         if e.get("op") == "set_speaker":
             _set_speaker(out, e)
         elif e.get("op") == "set_text":
-            out.segments[int(e["seg"])].text = e["to"]
+            _set_text(out, e)
         else:
             raise ValueError(f"모르는 편집 연산: {e.get('op')}")
     # 더는 어느 세그먼트도 쓰지 않는 라벨의 이름 항목은 지운다(목소리 DB 등록 대상에서 빠지게)
@@ -110,6 +133,29 @@ def same(a: Transcript, b: Transcript) -> bool:
     return key(a) == key(b)
 
 
+def side_file(seg: Path, stem: str, suffix: str) -> Path:
+    return seg.with_name(f"{stem}{suffix}")
+
+
+def summary_file(seg: Path, stem: str) -> Path | None:
+    """요약 탭에 보일 md: `<이름>.녹취록.md`, `<이름>.요약.md`, 그다음 `<이름>…요약.md` 중 첫 것."""
+    for suf in (".녹취록.md", ".요약.md"):
+        if (p := side_file(seg, stem, suf)).is_file():
+            return p
+    # glob은 이름 속 [ ] 를 패턴으로 읽으므로 직접 거른다
+    found = sorted(p for p in seg.parent.iterdir()
+                   if p.is_file() and p.name.startswith(stem) and p.name.endswith(".요약.md"))
+    return found[0] if found else None
+
+
+def glossary_terms(series: str) -> list[str]:
+    """시리즈 용어집의 정답 표기. 자료(docs/)는 읽지 않는다(칩에는 용어집만 쓰고, 문서 파싱은 느리다)."""
+    if not series or "/" in series or "\\" in series or series.startswith("."):
+        return []
+    g = series_root() / series / "glossary.txt"
+    return parse_glossary(g.read_text(encoding="utf-8"))[0] if g.is_file() else []
+
+
 class Session:
     """segments.json 하나에 대한 검토 상태. 원본·편집 로그·결과 파일 경로를 쥔다."""
 
@@ -125,8 +171,11 @@ class Session:
         self.notice = ""
         if self.orig.is_file() and not same(apply_edits(self.base(), self.edits), Transcript.from_json(self.seg)):
             self._rebase()
-        self.current = apply_edits(self.base(), self.edits)
+        self._base = self.base()
+        self.current = apply_edits(self._base, self.edits)
         self._disk = self.seg.read_bytes()
+        self.memo_path = side_file(seg_path, stem, ".memo.md")
+        self.corrections_path = side_file(seg_path, stem, ".corrections.json")
 
     def _rebase(self) -> None:
         """지난 검토 뒤 segments.json이 다른 곳(rec2md voices name·match 등)에서 바뀌었다. 그 내용을 버리지 않도록
@@ -151,7 +200,7 @@ class Session:
     def _write(self) -> None:
         if not self.orig.is_file():  # 처음 저장할 때 한 번만 원본을 남긴다
             shutil.copy2(self.seg, self.orig)
-        self.current = apply_edits(self.base(), self.edits)
+        self.current = apply_edits(self._base, self.edits)
         self.current.to_json(self.seg)
         self.raw.write_text(render_raw(self.current, self.stem), encoding="utf-8")
         self.edits_path.write_text(json.dumps(self.edits, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -160,7 +209,9 @@ class Session:
     def add(self, edit: dict) -> None:
         self._check_disk()
         edit = {**edit, "at": edit.get("at") or now()}
-        apply_edits(self.current, [edit])  # 잘못된 연산이면 로그에 넣기 전에 ValueError
+        nxt = apply_edits(self.current, [edit])  # 잘못된 연산이면 로그에 넣기 전에 ValueError
+        if same(nxt, self.current):  # 바뀌는 게 없으면 로그에 남기지 않는다(되돌리기가 헛돌지 않게)
+            return
         self.edits.append(edit)
         self._write()
 
@@ -181,13 +232,70 @@ class Session:
             "source": t.source, "duration": t.duration,
             "date": t.meta.get("date") or t.meta.get("datetime") or "",
             "segments": [{"i": i, "start": s.start, "end": s.end, "text": s.text, "speaker": s.speaker,
-                          "name": display_name(s.speaker, names)} for i, s in enumerate(t.segments)],
+                          "name": display_name(s.speaker, names), "edited": s.text != b.text}
+                         for i, (s, b) in enumerate(zip(t.segments, self._base.segments))],
             "speakers": [{"label": lb, "name": display_name(lb, names),
                           "user": is_user(names.get(lb))}
                          for lb in labels],
             "edits": len(self.edits),
             "notice": self.notice,
         }
+
+    def title(self) -> str:
+        return self.current.meta.get("title") or self.stem
+
+    def transcript_txt(self) -> str:
+        """`복사` 버튼: 지금 상태(화자 이름 반영)를 클로바 txt 형식으로."""
+        return render_clova_txt(self.current, title=self.title())
+
+    # ---- 오른쪽 패널 ----
+
+    def memo(self) -> str:
+        return self.memo_path.read_text(encoding="utf-8") if self.memo_path.is_file() else ""
+
+    def panel(self) -> dict:
+        p = summary_file(self.seg, self.stem)
+        return {"summary": {"name": p.name, "text": p.read_text(encoding="utf-8")} if p else None,
+                "memo": self.memo(), "memo_name": self.memo_path.name}
+
+    def save_memo(self, text: str, base: str) -> str:
+        """base는 화면이 마지막으로 읽거나 저장한 메모. 그사이 파일이 바뀌었으면 덮어쓰지 않는다."""
+        if not isinstance(text, str) or not isinstance(base, str):
+            raise TypeError("text·base는 문자열")
+        if self.memo() != base:
+            raise MemoConflict(f"{self.memo_path.name}이 다른 곳에서 바뀜 — 덮어쓰지 않음. 새로고침하면 파일 내용을 다시 읽음")
+        if text or self.memo_path.is_file():
+            self.memo_path.write_text(text, encoding="utf-8")
+        return text
+
+    # ---- 키워드 칩 ----
+
+    def keywords(self, series: str | None = None) -> list[dict]:
+        """칩 후보. fix: corrections.json의 고칠 만한 표기(제안이 있는 것), term: 시리즈 용어집.
+        녹취에 몇 번 나오는지는 화면이 지금 문장으로 센다(편집하면 바뀌므로)."""
+        out: list[dict] = []
+        corr = {}
+        if self.corrections_path.is_file():
+            try:
+                corr = json.loads(self.corrections_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                corr = {}
+        seen = set()
+        for c in corr.get("candidates") or []:
+            text, sug = str(c.get("text") or "").strip(), [x for x in c.get("suggest") or [] if x]
+            if text and sug and text not in seen:
+                seen.add(text)
+                out.append({"text": text, "kind": "fix", "hint": " / ".join(sug)})
+        series = series or corr.get("series") or self.current.meta.get("series")
+        for term in glossary_terms(series) if series else []:
+            if term not in seen:
+                seen.add(term)
+                out.append({"text": term, "kind": "term", "hint": ""})
+        return out
+
+
+class MemoConflict(ValueError):
+    pass
 
 
 # ---- 판정 모드 ----
