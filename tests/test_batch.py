@@ -185,3 +185,21 @@ def test_state_without_source_is_still_resumed(folder, calls):
                          {"a_meeting.mp3": {"status": "done", "sec": 1800.0}})
     cmd_batch.main([str(folder)])
     assert seen == ["b_call.M4A"]
+
+
+def test_same_stem_from_previous_batch_is_a_clash(folder, calls, tmp_path):
+    """앞 배치의 a/meeting.mp3와 이번 배치의 b/meeting.wav는 출력이 같다 → 겹침 (Codex 재리뷰 #28)."""
+    seen, _ = calls
+    out = tmp_path / "shared"
+    cmd_batch.main([str(folder), "--out", str(out)])
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "a_meeting.wav").write_bytes(b"")
+    LENGTHS["a_meeting.wav"] = 900.0
+    try:
+        seen.clear()
+        with pytest.raises(SystemExit, match="출력 이름이 겹쳐"):
+            cmd_batch.main([str(other), "--out", str(out)])
+        assert seen == []
+    finally:
+        del LENGTHS["a_meeting.wav"]

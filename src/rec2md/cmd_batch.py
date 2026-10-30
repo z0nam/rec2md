@@ -68,11 +68,13 @@ def _clashes(files: list[Path], state: dict) -> set[Path]:
     for f in files:
         by_stem.setdefault(f.stem.casefold(), []).append(f)
     out = {f for group in by_stem.values() if len(group) > 1 for f in group}
-    # 같은 출력 폴더를 다른 원본이 이미 썼다 (예전 상태에 source가 없으면 같은 원본으로 본다)
-    for f in files:
-        src = state.get(f.name, {}).get("source")
-        if src and src != str(f.resolve()):
-            out.add(f)
+    # 같은 출력 폴더를 다른 원본이 이미 썼다: 출력 이름(stem)이 같은 기록이 이 파일 것이 아니면 겹침.
+    # 이 파일 것인지는 source 경로로, source가 없는 예전 기록은 파일명으로 판단한다
+    for name, rec in state.items():
+        for f in by_stem.get(Path(name).stem.casefold(), []):
+            src = rec.get("source") if isinstance(rec, dict) else None
+            if (src and src != str(f.resolve())) or (not src and name != f.name):
+                out.add(f)
     return out
 
 
