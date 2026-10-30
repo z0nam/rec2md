@@ -13,7 +13,8 @@ import argparse
 import shutil
 from pathlib import Path
 
-from .series import PROMPT_TOKENS, build_prompt, load_series, parse_attendees, parse_glossary, series_root
+from .series import (PROMPT_TOKENS, attendees_from_clova, build_prompt, load_series, parse_attendees, parse_glossary,
+                     series_root)
 
 
 def _append(path: Path, lines: list[str], existing: set[str]) -> int:
@@ -39,11 +40,11 @@ def cmd_init(args) -> None:
         if not (d / f).exists():
             (d / f).write_text(head, encoding="utf-8")
     if args.from_clova:
-        # 클로바 txt 3번째 줄이 참석자 목록이다
-        lines = args.from_clova.read_text(encoding="utf-8-sig").splitlines()
-        names = parse_attendees(lines[2]) if len(lines) > 2 else []
-        n = _append(d / "attendees.txt", names, set(parse_attendees((d / "attendees.txt").read_text("utf-8"))))
-        print(f"참석자 {n}명 추가 (클로바 3번째 줄)")
+        found = attendees_from_clova(args.from_clova)
+        cur = set(parse_attendees((d / "attendees.txt").read_text("utf-8")))
+        lines = [f"{n}\t{o}" if o else n for n, o in found.items() if n not in cur]
+        n = _append(d / "attendees.txt", lines, set())
+        print(f"참석자 {n}명 추가 (클로바 화자 라벨)")
     print(d)
 
 

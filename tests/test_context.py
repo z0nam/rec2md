@@ -40,6 +40,16 @@ def test_parse_attendees_with_org():
     assert got == {"홍길동": "가상연구원", "김철수": "가상도청 담당", "이영희": "", "박민수": ""}
 
 
+def test_attendees_from_clova_labels(tmp_path):
+    from rec2md.series import attendees_from_clova
+    clova = tmp_path / "c.txt"
+    body = ["제목", "2026.01.01 Thu AM 10:00 ・ 5Minutes", "홍길동 김철수 가상도청 기획팀장 가상도청 주무관님 (성함확인필요)", "",
+            "홍길동 00:00", "시작합니다", "", "김철수 가상도청 기획팀장 00:10", "네", "",
+            "가상도청 주무관님 (성함확인필요) 00:20", "예", "", "Attendees 3 00:30", "음", "", "홍길동 00:40", "끝"]
+    clova.write_text("\n".join(body) + "\n", encoding="utf-8")
+    assert attendees_from_clova(clova) == {"홍길동": "", "김철수": "가상도청 기획팀장"}
+
+
 def test_parse_glossary():
     terms, variants = parse_glossary("# 주석\n탐라데이터센터\n한나산 => 한라산\n\n탐라데이터센터\n")
     assert terms == ["탐라데이터센터", "한라산"]
@@ -49,7 +59,8 @@ def test_parse_glossary():
 def test_series_cli_roundtrip(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("REC2MD_SERIES_DIR", str(tmp_path))
     clova = tmp_path / "c.txt"
-    clova.write_text("제목\n2026.01.01 Thu AM 10:00 ・ 1Minutes\n홍길동 김철수\n\n홍길동 00:00\n안녕\n", encoding="utf-8")
+    clova.write_text("제목\n2026.01.01 Thu AM 10:00 ・ 1Minutes\n홍길동 김철수\n\n홍길동 00:00\n안녕\n\n김철수 00:05\n네\n",
+                     encoding="utf-8")
     series_main(["init", "가상위", "--from-clova", str(clova)])
     series_main(["add", "가상위", "--term", "탐라데이터센터", "--fix", "한나산 => 한라산", "--attendee", "이몽룡=가상도청"])
     ctx = load_series("가상위")
