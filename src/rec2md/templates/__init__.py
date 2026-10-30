@@ -99,13 +99,14 @@ class Template:
     time_sep: str = "-"               # "14:00-15:00"의 구분자를 이걸로 바꿔 표시 (예: " – ")
     attendee_style: str = "org"       # org: 소속 줄 + "- 이름, 이름" / flat: "이름(소속 직위), …"
     attendee_role: bool = False       # 이름 뒤에 직위 표시
+    toml_dir: Path | None = None      # template.toml이 있는 폴더 (dirs 중 하나)
     data: dict = field(default_factory=dict)  # template.toml 원문. 형식별 절([docx], [hwpx] …)은 렌더러가 직접 읽는다
 
     # ── 파일 ──────────────────────────────────────────────
     @property
     def dir(self) -> Path:
         """template.toml이 있는 폴더."""
-        return self.dirs[0]
+        return self.toml_dir or self.dirs[0]
 
     def file(self, fmt_or_name: str) -> Path | None:
         """형식(`hwpx`) 또는 파일 이름(`form.hwpx`)으로 원본 파일을 찾는다. 없으면 None."""
@@ -200,7 +201,7 @@ class Template:
 
         if st.summary and m.summary:
             heading(st.summary)
-            out += [Line(2, s, st.child) for s in m.summary]
+            out += [Line(1, s, st.child) for s in m.summary]  # 개요는 소항목 자리에 내용 접두로
         for sec in m.sections:
             heading(sec.heading)
             items(sec.items, 1)
@@ -261,15 +262,16 @@ def load_template(name_or_path: str | Path) -> Template:
         # 사용자 폴더에 template.toml 없이 원본(form.hwpx 등)만 둔 경우도 찾는다
         if (user_dir() / name).is_dir() and user_dir() / name not in dirs:
             dirs.insert(0, user_dir() / name)
-    conf = tomllib.loads((dirs[0] / "template.toml").read_text(encoding="utf-8"))
-    return from_dict(name, conf, dirs + [BUILTIN_DIR / BASE])
+    toml_dir = next(d for d in dirs if (d / "template.toml").is_file())
+    conf = tomllib.loads((toml_dir / "template.toml").read_text(encoding="utf-8"))
+    return from_dict(name, conf, dirs + [BUILTIN_DIR / BASE], toml_dir)
 
 
 # 형식별 렌더러 전용 절. 로더는 검사하지 않고 Template.data로 넘긴다
 FORMAT_SECTIONS = {"md", "html", "docx", "hwpx"}
 
 
-def from_dict(name: str, conf: dict, dirs: list[Path]) -> Template:
+def from_dict(name: str, conf: dict, dirs: list[Path], toml_dir: Path | None = None) -> Template:
     raw, conf = conf, {k: v for k, v in conf.items() if k not in FORMAT_SECTIONS}
     known = {"name", "title", "description", "fields", "content", "files", "date_style", "time_sep",
              "attendee_style", "attendee_role"}
@@ -280,6 +282,7 @@ def from_dict(name: str, conf: dict, dirs: list[Path]) -> Template:
     return Template(
         name=conf.pop("name", name),
         dirs=dirs,
+        toml_dir=toml_dir,
         fields=[Field(**f) for f in conf.pop("fields", [])],
         content=ContentStyle(**content, tail_headings=tail_headings),
         files=DEFAULT_FILES | conf.pop("files", {}),

@@ -13,6 +13,12 @@ dependencies = [
 diarize = [
     "pyannote.audio>=4.0",
 ]
+render = [
+    "jinja2>=3.1",
+]
+export = [
+    "pypdfium2>=4.30",
+]
 
 [dependency-groups]
 dev = ["rapidfuzz>=3.0"]  # scripts/compare.py

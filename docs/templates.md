@@ -58,3 +58,4 @@ decisions = "결정사항"
 - `t.file("hwpx")` 또는 `t.file("form.hwpx")` — 원본 경로 또는 None. `t.dir` — template.toml 폴더. `t.data` — toml 원문.
 - 렌더러 시그니처: `rec2md.render.<fmt>.render_<fmt>(m: Minutes, template: Template, out: Path) -> Path`.
   pdf 변환은 같은 모듈의 `to_pdf(src: Path, out: Path) -> Path`(선택), 쪽별 png는 `to_png(src: Path, out_dir: Path) -> list[Path]`(선택).
+- **내보내기 규약**: `rec2md.export`는 html만 직접 바꾸고(Chrome → WeasyPrint), 다른 형식은 `rec2md.render.<형식>`의 `to_pdf`/`to_png`를 찾아 부르기만 한다. 함수나 외부 도구(soffice, rhwp, Chrome)가 없으면 **무엇을 설치하면 되는지** 담은 `rec2md.export.ExportError`로 끝낸다.

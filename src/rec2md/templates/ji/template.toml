@@ -40,6 +40,8 @@ value = "agenda"
 label = "회의내용"
 value = "content"
 block = true
+anchor = "내용"     # 실물 양식: "회의내용"(세로 병합) 오른쪽 머리 칸 "내용", 값은 그 아래
+where = "below"
 
 [content]
 heading = "{n}. "
