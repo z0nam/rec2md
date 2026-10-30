@@ -405,7 +405,7 @@ async function commitText(i, e) {
   } catch (err) { setStatus("저장 실패: " + err.message, true); }
   // 편집 모드를 끄며 다시 그렸으면 e는 이미 화면에 없다. 지금 화면의 그 문장을 채운다
   const live = segEl(i) && segEl(i).querySelector(".text");
-  for (const x of new Set([e, live])) if (x && document.activeElement !== x) fillText(x, i);
+  for (const x of new Set([e, live])) if (x) fillText(x, i);
 }
 $("edit").onclick = () => {
   editing = !editing;
@@ -458,9 +458,10 @@ function renderChips() {
   fitTop();
 }
 function fillText(e, i) {
+  if (document.activeElement === e) return;   // 고치는 중인 문장은 건드리지 않는다(쓰던 글자·커서 보존)
   const text = S.segments[i].text;
   const k = kwOn && kwOn.text;
-  if (!k || !text.includes(k) || document.activeElement === e) { e.textContent = text; return; }
+  if (!k || !text.includes(k)) { e.textContent = text; return; }
   e.replaceChildren();
   let at = 0, j;
   while ((j = text.indexOf(k, at)) >= 0) {
@@ -575,6 +576,7 @@ $("psum").addEventListener("click", (ev) => {
 });
 
 let memoBase = "", memoTimer = null, memoBusy = null, memoBroken = false;
+let memoSending = null;   // 저장 중인 글. 성공하면 다음 base가 된다
 function tab(name) {
   $("tabsum").classList.toggle("on", name === "sum");
   $("tabmemo").classList.toggle("on", name === "memo");
@@ -605,6 +607,7 @@ async function saveMemo() {
   if (memoBusy) { await memoBusy; return saveMemo(); }   // 저장은 한 번에 하나씩, 순서대로
   const text = $("memo").value;
   if (text === memoBase) return;
+  memoSending = text;
   memoBusy = (async () => {
     try {
       await api("/api/memo", { text, base: memoBase });
@@ -619,6 +622,7 @@ async function saveMemo() {
   })();
   await memoBusy;
   memoBusy = null;
+  memoSending = null;
 }
 $("memo").addEventListener("input", () => {
   $("mstat").className = "mstat";
@@ -631,7 +635,8 @@ window.addEventListener("pagehide", () => {
   const text = $("memo").value;
   if (!memoBroken && S && S.mode === "transcript" && text !== memoBase) {
     fetch("/api/memo", { method: "POST", keepalive: true, headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, base: memoBase }) });
+      // 저장이 아직 진행 중이면 그 저장이 먼저 끝나든 나중에 끝나든 받아들여지도록 두 base를 다 보낸다
+      body: JSON.stringify({ text, base: memoSending === null ? memoBase : [memoBase, memoSending] }) });
   }
 });
 function fitTop() { $("layout").style.setProperty("--top", document.querySelector("header").offsetHeight + "px"); }

@@ -258,11 +258,13 @@ class Session:
         return {"summary": {"name": p.name, "text": p.read_text(encoding="utf-8")} if p else None,
                 "memo": self.memo(), "memo_name": self.memo_path.name}
 
-    def save_memo(self, text: str, base: str) -> str:
-        """base는 화면이 마지막으로 읽거나 저장한 메모. 그사이 파일이 바뀌었으면 덮어쓰지 않는다."""
-        if not isinstance(text, str) or not isinstance(base, str):
-            raise TypeError("text·base는 문자열")
-        if self.memo() != base:
+    def save_memo(self, text: str, base: str | list[str]) -> str:
+        """base는 화면이 마지막으로 읽거나 저장한 메모. 그사이 파일이 바뀌었으면 덮어쓰지 않는다.
+        페이지를 닫을 때는 아직 끝나지 않은 저장이 있을 수 있어, base를 [지난 저장본, 저장 중인 글] 목록으로 받는다."""
+        bases = base if isinstance(base, list) else [base]
+        if not isinstance(text, str) or not bases or not all(isinstance(b, str) for b in bases):
+            raise TypeError("text는 문자열, base는 문자열 또는 문자열 목록")
+        if self.memo() not in bases:
             raise MemoConflict(f"{self.memo_path.name}이 다른 곳에서 바뀜 — 덮어쓰지 않음. 새로고침하면 파일 내용을 다시 읽음")
         if text or self.memo_path.is_file():
             self.memo_path.write_text(text, encoding="utf-8")

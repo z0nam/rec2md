@@ -369,6 +369,21 @@ def test_memo_save_and_conflict(seg_file):
     assert s.memo() == "다른 편집기에서 고침"
 
 
+def test_memo_unload_save_accepts_pending_base(seg_file):
+    """닫을 때의 저장은 진행 중이던 저장이 먼저 끝나도, 나중에 끝나도 받아들여진다."""
+    s = Session(seg_file)
+    s.save_memo("가", "")
+    s.save_memo("가나", "가")                       # 진행 중이던 저장이 먼저 끝남
+    s.save_memo("가나다", ["가", "가나"])           # 닫을 때의 저장
+    assert s.memo() == "가나다"
+    s2 = Session(seg_file.with_name("meet.segments.json"))
+    s2.memo_path.write_text("가", encoding="utf-8")
+    s2.save_memo("가나다", ["가", "가나"])          # 닫을 때의 저장이 먼저 도착
+    with pytest.raises(MemoConflict):
+        s2.save_memo("가나", "가")                  # 늦게 온 옛 저장은 새 글을 덮지 않음
+    assert s2.memo() == "가나다"
+
+
 def test_keywords_from_corrections_and_glossary(tmp_path, seg_file, monkeypatch):
     s = Session(seg_file)
     assert s.keywords() == []
