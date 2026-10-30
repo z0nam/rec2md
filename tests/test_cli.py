@@ -4,10 +4,9 @@ import pytest
 from rec2md.cli import main
 
 
-def test_unimplemented_subcommand_voices():
-    with pytest.raises(SystemExit) as exc_info:
-        main(["voices"])
-    assert "아직 구현되지 않은 명령: voices" in str(exc_info.value)
+def test_subcommand_voices_dispatch(tmp_path, capsys):
+    main(["voices", "--db", str(tmp_path / "voices.db"), "list"])
+    assert "등록된 사람 없음" in capsys.readouterr().out
 
 
 def test_unimplemented_subcommand(monkeypatch):

@@ -2294,11 +2294,18 @@ office = [
 render = [
     { name = "jinja2" },
 ]
+voices = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
 
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
     { name = "rapidfuzz" },
+    { name = "rec2md", extra = ["voices"] },
 ]
 
 [package.metadata]
@@ -2306,18 +2313,21 @@ requires-dist = [
     { name = "docxtpl", marker = "extra == 'office'", specifier = ">=0.18" },
     { name = "jinja2", marker = "extra == 'render'", specifier = ">=3.1" },
     { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.4.2" },
+    { name = "numpy", marker = "extra == 'voices'", specifier = ">=1.24" },
     { name = "pillow", marker = "extra == 'export'", specifier = ">=10" },
     { name = "pyannote-audio", marker = "extra == 'diarize'", specifier = ">=4.0" },
     { name = "pypdfium2", marker = "extra == 'export'", specifier = ">=4.30" },
     { name = "python-docx", marker = "extra == 'office'", specifier = ">=1.1" },
     { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "scipy", marker = "extra == 'voices'", specifier = ">=1.10" },
 ]
-provides-extras = ["diarize", "render", "export", "office"]
+provides-extras = ["diarize", "render", "export", "office", "voices"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "rapidfuzz", specifier = ">=3.0" },
+    { name = "rec2md", extras = ["voices"] },
 ]
 
 [[package]]
