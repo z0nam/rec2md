@@ -138,13 +138,25 @@ def _confidence(score: float, has_phrase: bool) -> str:
     return "high" if score >= 3.5 and has_phrase else "medium"
 
 
-def _pick(scored: list[tuple], earliest: bool) -> tuple:
-    """최고점 근처 후보 중 회의 쪽에 가장 가까운 것. 창 신호는 경계에서 멀어질수록 커지는 경향이 있어
-    최고점만 고르면 경계가 바깥으로 밀린다(실측: 회의 뒤 통화의 끝 무렵이 최고점)."""
+def _start_threshold(x: tuple) -> float:
+    return MIN_SCORE if x[3] else MIN_SCORE_START_NO_PHRASE
+
+
+def _pick(scored: list[tuple], earliest: bool, threshold) -> tuple:
+    """기준을 넘는 후보 중, 최고점 근처에서 회의 쪽에 가장 가까운 것. 창 신호는 경계에서 멀어질수록
+    커지는 경향이 있어 최고점만 고르면 경계가 바깥으로 밀린다(실측: 회의 뒤 통화의 끝 무렵이 최고점).
+
+    threshold(후보) → 그 후보가 넘어야 할 점수. 기준 미달 후보를 먼저 빼야 최고점이 기준을 겨우 넘을 때
+    80% 규칙이 미달 후보를 골라 경계를 통째로 버리는 일이 없다. 넘는 후보가 없으면 최고점 후보를 돌려준다
+    (호출 쪽이 기준과 비교해 "신호 없음"으로 보고한다).
+    """
     if not scored:
         return 0.0, None, [], []
-    top = max(x[0] for x in scored)
-    near = [x for x in scored if x[0] >= NEAR_BEST * top]
+    ok = [x for x in scored if x[0] >= threshold(x)]
+    if not ok:
+        return max(scored, key=lambda x: x[0])
+    top = max(x[0] for x in ok)
+    near = [x for x in ok if x[0] >= NEAR_BEST * top]
     return min(near, key=lambda x: x[1]) if earliest else max(near, key=lambda x: x[1])
 
 
@@ -170,7 +182,7 @@ def estimate(t: Transcript) -> dict:
         hits = _phrases(segs, _CLOSE, c - LOOKBACK, c + 5)
         side, ev = _side_score(segs, c, min(dur, c + WIN), base, _gap_after(segs, c))
         scored.append((_phrase_score(hits, _CLOSE_STRONG) + side, c, ev, hits))
-    sc, end, ev, hits = _pick(scored, earliest=True)
+    sc, end, ev, hits = _pick(scored, earliest=True, threshold=lambda x: MIN_SCORE)
     if sc >= MIN_SCORE:
         if hits:
             # 창 신호는 실제 끝보다 늦게 잡히므로 마지막 종료 표현이 나온 발화의 끝으로 당긴다
@@ -197,8 +209,8 @@ def estimate(t: Transcript) -> dict:
         prev_end = max((x.end for x in segs if x.end <= c), default=0.0)
         side, ev = _side_score(segs, max(0.0, c - WIN), c, base, c - prev_end)
         scored.append((_phrase_score(hits, None) + side, c, ev, hits))
-    sc, start, ev, hits = _pick(scored, earliest=False)
-    if sc >= (MIN_SCORE if hits else MIN_SCORE_START_NO_PHRASE):
+    sc, start, ev, hits = _pick(scored, earliest=False, threshold=_start_threshold)
+    if sc >= _start_threshold((sc, start, ev, hits)):
         if hits:
             ev = [f"개회 표현 {_quote(hits)}"] + ev
         out["start"] = round(start, 1)

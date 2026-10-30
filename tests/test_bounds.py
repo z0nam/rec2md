@@ -36,6 +36,15 @@ def test_tail_after_closing_is_cut():
     assert any("종료 표현" in e for e in b["evidence"])
 
 
+def test_pick_ignores_subthreshold_candidates():
+    # 화자 라벨 없이 밀도만 떨어지는 꼬리: 최고점이 기준을 겨우 넘어도 경계를 버리지 않는다
+    # (이 배치에서 최고점 2.0대, 80% 규칙만 쓰면 기준 미달인 더 이른 후보가 골라 "신호 없음"이 됐다)
+    segs = [Segment(s.start, s.end, s.text) for s in meeting(0, 1800)]
+    segs += [Segment(s.start, s.end, s.text) for s in chatter(1830, 2400, every=50)]
+    b = estimate(Transcript("x", 2400, "local", "ko", segs))
+    assert b["confidence"] != "none" and 1790 <= b["end"] <= 1900
+
+
 def test_whole_meeting_is_not_cut():
     segs = meeting(0, 2400) + [Segment(2400, 2405, "수고하셨습니다", speaker="화자2")]
     b = estimate(Transcript("x", 2410, "local", "ko", segs))
