@@ -60,6 +60,8 @@ def main(argv: list[str]) -> None:
     how.add_argument("--from-names", action="store_true",
                      help='meta.speaker_names 중 사용자가 지정한 이름(source "user")을 등록. 짧은 화자는 건너뜀')
     e.add_argument("--min-sec", type=float, default=voices.MIN_ENROLL_SEC, help="이보다 짧은 화자는 거절")
+    e.add_argument("--force", action="store_true",
+                   help="이미 등록된 목소리와 닮지 않아도 등록 (원거리 녹음 등 확실할 때만. 방·마이크 특성을 닮아 오태깅 위험)")
 
     sub.add_parser("list", help="등록된 사람")
     r = sub.add_parser("rename", help="이름 바꾸기")
@@ -115,7 +117,7 @@ def main(argv: list[str]) -> None:
                     raise SystemExit("사용자가 지정한 화자 이름(meta.speaker_names, source \"user\")이 없음")
             segs = voices.load_segments(voices.sidecar_path(args.segments))
             for msg in voices.enroll(db, side, mapping, t.source, args.min_sec, skip_short=args.from_names,
-                                     segments=segs):
+                                     segments=segs, force=args.force):
                 print(msg)
         elif args.cmd == "list":
             rows = db.people()

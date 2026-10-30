@@ -192,7 +192,8 @@ def test_below_threshold_edges_do_not_displace_valid_match(monkeypatch):
     monkeypatch.setattr(voices, "score_matrix", lambda p, c: (["화자1", "화자2"], ["홍길동", "김철수"], m))
     clusters = {"화자1": (np.ones(2), 60), "화자2": (np.ones(2), 60)}
     got = voices.match({"홍길동": np.ones((1, 2)), "김철수": np.ones((1, 2))}, clusters, threshold=0.75)
-    assert got == {"화자1": {"name": "홍길동", "score": 0.8}}
+    # 0.80 짝이 살아남되, 2위(0.74)와 차가 작아 불확실 표시
+    assert got == {"화자1": {"name": "홍길동", "score": 0.8, "tentative": True, "gap": 0.06}}
 
 
 def test_sidecar_empty_mapping_and_permissions(tmp_path):
@@ -217,3 +218,31 @@ def test_cli_name_then_enroll_from_names(tmp_path, capsys):
         assert [r[0] for r in vdb.people()] == ["홍길동"]
     with pytest.raises(SystemExit, match="없는 화자"):
         cmd_voices.main(["--db", db, "name", str(a), "--map", "화자9=누구"])
+
+
+def test_enroll_rejects_unlike_voice_unless_forced():
+    db = voices.VoiceDB(":memory:")
+    voices.enroll(db, {"화자1": (noisy("홍길동"), 60.0)}, {"화자1": "홍길동"}, "a.wav")
+    other = {"화자1": (noisy("홍길동"), 60.0), "화자2": (noisy("김철수"), 60.0)}
+    # 다른 사람 목소리에 이미 등록된 이름을 주면 거절 (하나라도 걸리면 아무것도 등록하지 않음)
+    with pytest.raises(SystemExit, match="닮지 않아"):
+        voices.enroll(db, other, {"화자1": "이영희", "화자2": "홍길동"}, "b.wav")
+    assert db.people() == [("홍길동", 1, 60.0)]
+    # 검토 화면 일괄 등록(skip_short)에서는 그것만 건너뛴다
+    msgs = voices.enroll(db, other, {"화자1": "이영희", "화자2": "홍길동"}, "b.wav", skip_short=True)
+    assert any("화자2 → 홍길동 건너뜀" in m for m in msgs)
+    assert [r[0] for r in db.people()] == ["이영희", "홍길동"]
+    # 같은 사람의 다른 녹취는 통과, force면 닮지 않아도 등록
+    voices.enroll(db, {"화자1": (noisy("홍길동"), 60.0)}, {"화자1": "홍길동"}, "c.wav")
+    voices.enroll(db, {"화자9": (noisy("김철수"), 60.0)}, {"화자9": "홍길동"}, "d.wav", force=True)
+    assert dict((n, k) for n, k, _ in db.people())["홍길동"] == 3
+
+
+def test_match_close_second_person_is_tentative(monkeypatch):
+    m = np.array([[0.90, 0.80], [0.92, 0.40]], dtype=np.float32)
+    monkeypatch.setattr(voices, "score_matrix", lambda p, c: (["화자1", "화자2"], ["홍길동", "김철수"], m))
+    got = voices.match({"홍길동": np.ones((1, 2)), "김철수": np.ones((1, 2))},
+                       {"화자1": (np.ones(2), 60), "화자2": (np.ones(2), 60)}, threshold=0.75)
+    # 화자2→홍길동(차 0.52)은 확신, 화자1→김철수(0.80, 홍길동 0.90보다 낮음 → 차 음수)는 헷갈림
+    assert "tentative" not in got["화자2"]
+    assert got["화자1"]["name"] == "김철수" and got["화자1"]["tentative"] and got["화자1"]["gap"] < 0
