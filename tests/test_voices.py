@@ -202,3 +202,18 @@ def test_sidecar_empty_mapping_and_permissions(tmp_path):
     voices.save_sidecar(p, {"S0": np.ones(4)}, [(0, 2, "S0")], {}, [(0.0, 2.0, "S0", np.ones(4))])
     assert stat.S_IMODE(p.stat().st_mode) == 0o600
     assert voices.load_sidecar(p) == {} and voices.load_segments(p) == {}
+
+
+def test_cli_name_then_enroll_from_names(tmp_path, capsys):
+    db = str(tmp_path / "voices.db")
+    a = write_rec(tmp_path, "a", {"화자1": (noisy("홍길동"), 60), "화자2": (noisy("김철수"), 45)})
+    (tmp_path / "a.raw.md").write_text("old", encoding="utf-8")
+    cmd_voices.main(["--db", db, "name", str(a), "--map", "화자1=홍길동,화자2=김철수"])
+    assert "홍길동(화자1)" in (tmp_path / "a.raw.md").read_text(encoding="utf-8")
+    cmd_voices.main(["--db", db, "name", str(a), "--unset", "화자2"])
+    assert Transcript.from_json(a).meta["speaker_names"] == {"화자1": {"name": "홍길동", "source": "user"}}
+    cmd_voices.main(["--db", db, "enroll", str(a), "--from-names"])
+    with voices.VoiceDB.open(db) as vdb:
+        assert [r[0] for r in vdb.people()] == ["홍길동"]
+    with pytest.raises(SystemExit, match="없는 화자"):
+        cmd_voices.main(["--db", db, "name", str(a), "--map", "화자9=누구"])

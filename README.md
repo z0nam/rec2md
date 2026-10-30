@@ -74,6 +74,7 @@ rec2md series candidates 정례회의 meeting.segments.json       # 이미 전�
 ```sh
 rec2md voices enroll meeting.segments.json --map "화자1=홍길동,화자3=김철수"   # 발화 30초 미만 화자는 거절
 rec2md voices enroll meeting.segments.json --from-names   # 검토 화면에서 사용자가 지정한 이름을 등록
+rec2md voices name meeting.segments.json --map "화자1=홍길동"   # 확인한 이름을 녹취에 기록(검토 화면과 같은 source "user")
 rec2md voices list | rename <옛 이름> <새 이름> | forget <이름>
 rec2md voices match old.segments.json                     # 예전에 전사한 것에 다시 이름 붙이기
 rec2md meeting.m4a --no-voices                            # 자동 태깅 끄기

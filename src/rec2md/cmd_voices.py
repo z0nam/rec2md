@@ -10,14 +10,14 @@ from .render import render_raw
 from .segments import Transcript
 
 
-def _mapping(text: str) -> dict[str, str]:
+def _mapping(text: str, allow_same: bool = False) -> dict[str, str]:
     out = {}
     for pair in text.split(","):
         label, sep, name = pair.partition("=")
         if not sep or not label.strip() or not name.strip():
             raise SystemExit(f"--map 형식: \"화자3=홍길동,화자5=김철수\" (받은 값: {pair!r})")
         out[label.strip()] = name.strip()
-    if len(set(out.values())) < len(out):
+    if not allow_same and len(set(out.values())) < len(out):
         raise SystemExit("한 녹취에서 두 화자를 같은 이름에 등록할 수 없음(pyannote가 한 사람을 쪼갰다면 긴 쪽만 등록)")
     return out
 
@@ -29,6 +29,23 @@ def _longest_per_name(names: dict[str, str], side: dict) -> dict[str, str]:
         if lb in side and (name not in best or side[lb][1] > side[best[name]][1]):
             best[name] = lb
     return {lb: name for name, lb in best.items()}
+
+
+def _save_and_show(t: Transcript, seg_path: Path) -> None:
+    """segments.json과 (있으면) raw.md를 다시 쓰고 화자 이름 표를 찍는다."""
+    t.to_json(seg_path)
+    stem = seg_path.name.removesuffix(".segments.json")
+    raw = seg_path.with_name(f"{stem}.raw.md")
+    if raw.is_file():
+        raw.write_text(render_raw(t, stem), encoding="utf-8")
+    names = t.meta.get("speaker_names") or {}
+    for label in sorted(names, key=lambda x: int(x[2:]) if x[2:].isdigit() else 0):
+        d = names[label]
+        note = (" ?" if d.get("tentative") else "") + (f" (같은 사람 후보: {d['same_as']})" if "same_as" in d else "")
+        score = "사용자 지정" if d.get("source") == "user" else f"{d['score']:.3f}"
+        print(f"{label}\t{d['name']}\t{score}{note}")
+    if not names:
+        print("이름이 붙은 화자 없음")
 
 
 def main(argv: list[str]) -> None:
@@ -54,6 +71,11 @@ def main(argv: list[str]) -> None:
     m = sub.add_parser("match", help="이미 전사한 녹취에 다시 이름 붙이기 (segments.json·raw.md 갱신)")
     m.add_argument("segments", type=Path)
     m.add_argument("--threshold", type=float, default=voices.THRESHOLD)
+
+    n = sub.add_parser("name", help="사용자가 확인한 화자 이름을 녹취에 기록 (source \"user\", DB는 안 건드림)")
+    n.add_argument("segments", type=Path)
+    n.add_argument("--map", default="", help='"화자3=홍길동,화자5=김철수" (쪼개진 화자는 같은 이름 가능)')
+    n.add_argument("--unset", default="", help='이름을 뗄 화자: "화자3,화자5"')
     args = p.parse_args(argv)
 
     if args.cmd == "match":
@@ -61,19 +83,24 @@ def main(argv: list[str]) -> None:
         if not Path(args.db).is_file():
             raise SystemExit(f"목소리 DB 없음: {args.db} (먼저 enroll)")
         voices.annotate(t, voices.sidecar_path(args.segments), args.db, args.threshold)
-        t.to_json(args.segments)
-        stem = args.segments.name.removesuffix(".segments.json")
-        raw = args.segments.with_name(f"{stem}.raw.md")
-        if raw.is_file():
-            raw.write_text(render_raw(t, stem), encoding="utf-8")
-        names = t.meta["speaker_names"]
-        for label in sorted(names, key=lambda x: int(x.removeprefix("화자")) if x[2:].isdigit() else 0):
-            d = names[label]
-            note = (" ?" if d.get("tentative") else "") + (f" (같은 사람 후보: {d['same_as']})" if "same_as" in d else "")
-            score = "사용자 지정" if d.get("source") == "user" else f"{d['score']:.3f}"
-            print(f"{label}\t{d['name']}\t{score}{note}")
-        if not names:
-            print("임계값을 넘는 화자 없음")
+        _save_and_show(t, args.segments)
+        return
+    if args.cmd == "name":
+        t = Transcript.from_json(args.segments)
+        mapping = _mapping(args.map, allow_same=True) if args.map else {}
+        unset = [x.strip() for x in args.unset.split(",") if x.strip()]
+        known = {s.speaker for s in t.segments if s.speaker}
+        bad = [lb for lb in [*mapping, *unset] if lb not in known]
+        if bad:
+            raise SystemExit(f"이 녹취에 없는 화자: {', '.join(bad)} (있는 화자: {', '.join(sorted(known))})")
+        if not mapping and not unset:
+            raise SystemExit("--map 또는 --unset을 줘야 함")
+        names = dict(t.meta.get("speaker_names") or {})
+        for lb in unset:
+            names.pop(lb, None)
+        names.update({lb: {"name": nm, "source": "user"} for lb, nm in mapping.items()})
+        t.meta["speaker_names"] = names
+        _save_and_show(t, args.segments)
         return
 
     with voices.VoiceDB.open(args.db) as db:
