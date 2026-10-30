@@ -52,14 +52,14 @@ rec2md <파일...> [--speakers N] [--no-diarize] [--out <폴더>] [--language ko
    ```sh
    rec2md render --list-templates                     # 쓸 수 있는 양식
    rec2md render <이름>.minutes.json --template <양식> --format md,html [--export pdf,png]
-   rec2md render <이름>.minutes.json --template ji --format hwpx,docx    # 회사 양식 원본이 있을 때
+   rec2md render <이름>.minutes.json --template ji --format hwpx,docx    # 회사 원본이 있으면 그것을 채우고, 없으면 내장 골격
    ```
    - 양식: `kr-standard`(국내 기관 공통, 기본), `ji`(제주연구원 회의록 표). 사용자 양식은 `~/.config/rec2md/templates/<이름>/`(`template.toml`, `form.hwpx` 등). 회사 hwpx·docx 원본은 거기에만 둔다.
-   - 출력은 JSON 옆 `<이름>.md`, `.html`, `.docx`, `.hwpx`, `.pdf`, `.p1.png`…(`--out`으로 폴더 변경). png는 쪽마다 한 장.
+   - 출력은 JSON 옆 `<이름>.md`, `.html`, `.docx`, `.hwpx`, `.pdf`, `.p1.png`…(`--out`으로 폴더 변경). png는 쪽마다 한 장. pdf·png는 html이 있으면 html에서 만들고, html 없이 docx·hwpx를 같이 내보내면 `<이름>.docx.pdf`, `<이름>.hwpx.p1.png`처럼 형식별로 나뉜다.
    - 필요 패키지가 없다는 오류가 나면 안내대로 extra를 설치한다(`render`: md·html, `export`: pdf·png, `office`: docx·hwpx).
 4. **확인**: `--export png`로 만든 첫 쪽 이미지를 직접 보고 칸 누락·넘침을 확인한 뒤 사용자에게 파일 경로와 함께 "녹취에 없어 비워 둔 칸"을 알린다. 사용자가 고친 내용은 JSON에 반영하고 다시 렌더한다(출력 파일을 직접 고치지 않는다).
 
-클로바노트식 녹취록(`이름 00:00` + 발화)이 필요하면 JSON 없이 바로: `rec2md render <이름>.segments.json --kind transcript --format txt,md,html [--names 화자1=홍길동 ...]`.
+클로바노트식 녹취록(`이름 00:00` + 발화)이 필요하면 JSON 없이 바로: `rec2md render <이름>.segments.json --kind transcript --format txt,md,html [--names 화자1=홍길동 ...]`. 이 설치본에 아직 없어 "녹취록 내보내기(rec2md.transcript_export)가 아직 없음"으로 끝나면, 2단계처럼 `<이름>.raw.md`를 읽어 같은 배치(제목 / 일시 ・ 길이 / 참석자 줄 / `이름 00:00` + 발화)로 직접 쓴다.
 
 ## 주의
 - 녹취 내용은 개인정보다. 공개 저장소·외부 서비스에 올리지 않는다. `<이름>.minutes.json`과 렌더 결과도 같다.
