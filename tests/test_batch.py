@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from rec2md import cli, cmd_batch
+from rec2md import cli, cmd_batch, trim
 
 # 합성 파일 이름 → 길이(초)
 LENGTHS = {
@@ -21,6 +21,7 @@ LENGTHS = {
 
 # 긴 무음을 뺀 추정 말소리 길이 (없으면 파일 길이와 같음)
 SPEECH: dict[str, float] = {}
+GAPS: list[float] = []  # speech_sec에 넘어온 min_gap
 
 
 @pytest.fixture
@@ -41,7 +42,12 @@ def folder(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cmd_batch.audio, "probe_duration", probe)
     # 말소리 추정(소리 크기)은 기본으로 파일 길이 그대로, SPEECH에 있으면 그 값
-    monkeypatch.setattr(cmd_batch, "speech_sec", lambda path: SPEECH.get(path.name, LENGTHS.get(path.name)))
+    GAPS.clear()
+
+    def speech(path, min_gap=trim.MIN_GAP):
+        GAPS.append(min_gap)
+        return SPEECH.get(path.name, LENGTHS.get(path.name))
+    monkeypatch.setattr(cmd_batch, "speech_sec", speech)
     return d
 
 
@@ -255,3 +261,8 @@ def test_long_recording_with_mostly_silence_is_processed(folder, calls, capsys):
         assert "f_forgot.mp3" in seen
     finally:
         del LENGTHS["f_forgot.mp3"], SPEECH["f_forgot.mp3"]
+
+
+def test_trim_min_gap_reaches_speech_estimate(folder, capsys):
+    cmd_batch.main([str(folder), "--dry-run", "--trim-min-gap", "2"])
+    assert GAPS and set(GAPS) == {120.0}

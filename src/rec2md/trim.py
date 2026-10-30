@@ -9,7 +9,7 @@
   상한이 -35dB이면 시끄러운 방의 잡음이 말소리로 잡혀 5시간 38분 녹음이 4시간 22분 남았다(-30dB면 3시간 40분).
   -30dB로 새로 잘리는 구간 5곳을 Whisper로 들어 보니 4곳은 무음 환각뿐, 1곳은 먼 말소리 조각일 수 있었다.
 - 1분 창에서 10% 이상이 임계값을 넘으면 말소리 창. 말소리 창 앞뒤로 PAD만큼 남긴다.
-- 그 사이 비는 곳이 MIN_GAP(5분) 이상일 때만 잘라낸다. 애매하면 남긴다 — 남기면 시간만 들지만 자르면 내용을 잃는다.
+- 그 사이 비는 곳이 MIN_GAP(기본 5분, `--trim-min-gap`) 이상일 때만 잘라낸다. 애매하면 남긴다 — 남기면 시간만 들지만 자르면 내용을 잃는다.
 """
 
 from __future__ import annotations
@@ -69,6 +69,7 @@ class Plan:
     duration: float
     threshold: float
     review: list[tuple[float, float]] = None  # 잘라냈지만 약한 소리가 있던 1분 창(원본 초)
+    min_gap: float = MIN_GAP
 
     @property
     def kept_sec(self) -> float:
@@ -96,7 +97,7 @@ def plan(db: np.ndarray, min_gap: float = MIN_GAP) -> Plan:
         else:
             keep.append((s, e))
     if not keep:  # 말소리를 못 찾으면 자르지 않는다(판정을 믿지 않는 편이 안전)
-        return Plan([(0.0, dur)], [], dur, t, [])
+        return Plan([(0.0, dur)], [], dur, t, [], min_gap)
     # 처음·끝의 짧은 무음은 남긴다 — 앞뒤도 min_gap 이상일 때만 자른다
     if keep[0][0] < min_gap:
         keep[0] = (0.0, keep[0][1])
@@ -109,7 +110,7 @@ def plan(db: np.ndarray, min_gap: float = MIN_GAP) -> Plan:
         prev = e
     if prev < dur:
         cut.append((prev, dur))
-    return Plan(keep, cut, dur, t, _review(active, cut))
+    return Plan(keep, cut, dur, t, _review(active, cut), min_gap)
 
 
 def _review(active: np.ndarray, cut: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -169,6 +170,6 @@ def remap_spans(spans: list[tuple], m: OffsetMap) -> list[tuple]:
 
 
 def meta(p: Plan, m: OffsetMap) -> dict:
-    return {"threshold_db": round(p.threshold, 1), "min_gap": MIN_GAP, "kept_sec": round(p.kept_sec, 1),
+    return {"threshold_db": round(p.threshold, 1), "min_gap": p.min_gap, "kept_sec": round(p.kept_sec, 1),
             "cut": [[round(s, 1), round(e, 1)] for s, e in p.cut],
             "review": [[round(s, 1), round(e, 1)] for s, e in p.review or []], "offsets": m.table()}

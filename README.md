@@ -7,7 +7,7 @@
 - 회의 시리즈 용어집과 회의 자료로 고유명사 오인식을 줄이고, 고칠 후보만 골라 준다
 - 회의록은 에이전트가 `minutes.json`을 쓰고 `rec2md render`가 양식(국내 기관 공통, 제주연구원, 사용자 양식)에 맞춰 찍는다
 
-> 상태(2026-10-30): 전사·화자분리, 맥락 보정(`series`), 회의록 렌더(`render`), 화자 목소리 DB(`voices`) 동작. 검토 화면(`review`) 동작. 클로바식 녹취록 내보내기, 폴더 일괄 처리(`batch`)는 작업 중. 설계는 [`docs/PLAN.md`](docs/PLAN.md).
+> 상태(2026-10-30): 전사·화자분리, 맥락 보정(`series`), 회의록 렌더(`render`), 화자 목소리 DB(`voices`), 검토 화면(`review`), 클로바식 녹취록 내보내기(`render --kind transcript`), 폴더 일괄 처리(`batch`), 녹음기를 안 끈 긴 무음 자르기 동작. 설계는 [`docs/PLAN.md`](docs/PLAN.md).
 
 ## 설치 (Apple Silicon Mac)
 
@@ -41,7 +41,7 @@ uv tool install --editable '.[diarize,render,export,office]'
 | `rec2md series ...` | 회의 시리즈 용어집·참석자 관리, 보정 후보 뽑기 | 동작 |
 | `rec2md render ...` | 회의록 JSON → 양식 회의록 (md·html·docx·hwpx, pdf·png) | 동작 |
 | `rec2md notes <segments.json> <메모>` | 회의 메모 문단마다 녹취 근거 구간 후보 → 에이전트가 메모 보정본 작성 | 동작 |
-| `rec2md render --kind transcript ...` | segments.json → 클로바노트식 녹취록 (txt·md·html) | 작업 중 |
+| `rec2md render --kind transcript ...` | segments.json → 클로바노트식 녹취록 (txt·md·html) | 동작 |
 | `rec2md voices ...` | 목소리 등록, 새 녹취에 실명 자동 태깅 | 동작 |
 | `rec2md batch <폴더>` | 폴더 일괄 전사, `--dry-run`(길이·추정 말소리 길이·예상 시간), 중단 후 이어서 | 동작 |
 | `rec2md review <segments.json>` | 문장 클릭 재생 + 화자 고치기 (이 맥에서만 열리는 웹 화면) | 동작 |
@@ -54,13 +54,15 @@ rec2md meeting.m4a                 # → meeting.segments.json, meeting.raw.md
 rec2md call.mp3 --speakers 2       # 화자 수를 알면 지정
 rec2md talk.mov --no-diarize       # 영상도 됨, 화자분리 생략
 rec2md long.mp3 --no-trim          # 긴 무음을 자르지 않고 그대로 처리
+rec2md long.mp3 --trim-min-gap 10  # 10분 이상 이어진 무음만 자름 (기본 5분)
 ```
 
-녹음기를 끄지 않아 뒤에 몇 시간씩 붙은 무음은 **전사 전에 잘라낸다.** 소리 크기로 5분 이상 조용한 구간을 찾아 빼고 말소리 구간만 이어 붙여 화자분리·전사하며, 결과의 시각은 원본 녹음 기준이다. 잘라낸 구간은 `segments.json`의 `meta.trim.cut`에, 그중 약한 소리가 있어 다시 들어 볼 만한 구간은 `meta.trim.review`에 남는다. 아주 작게 말한 부분까지 잘릴까 걱정되면 `--no-trim`으로 끈다(시간·메모리는 더 든다).
+녹음기를 끄지 않아 뒤에 몇 시간씩 붙은 무음은 **전사 전에 잘라낸다.** 소리 크기로 5분 이상(`--trim-min-gap <분>`으로 바꿈) 조용한 구간을 찾아 빼고 말소리 구간만 이어 붙여 화자분리·전사하며, 결과의 시각은 원본 녹음 기준이다. 잘라낸 구간은 `segments.json`의 `meta.trim.cut`에, 그중 약한 소리가 있어 다시 들어 볼 만한 구간은 `meta.trim.review`에 남는다. 아주 작게 말한 부분까지 잘릴까 걱정되면 `--no-trim`으로 끈다(시간·메모리는 더 든다).
 
 ```sh
 rec2md batch ~/녹음 --dry-run      # 파일별 길이·추정 말소리 길이·판정·예상 처리시간만 보기
 rec2md batch ~/녹음                # 차례로 전사 → ~/녹음/_transcripts/, 중단 후 같은 명령으로 이어서
+                                   # --no-trim·--trim-min-gap도 그대로 받는다(dry-run 추정에도 반영)
 ```
 
 ### 맥락 보정 (회의 시리즈 용어집)
