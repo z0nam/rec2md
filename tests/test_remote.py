@@ -364,3 +364,14 @@ def test_run_captured_uses_files_not_pipes(monkeypatch):
 def test_run_captured_timeout():
     r = remote.run_captured(["python3", "-c", "import time; time.sleep(5)"], timeout=0.5)
     assert r.returncode == 124 and "끝나지 않음" in r.stderr
+
+
+def test_batch_without_numpy_says_how_to_install():
+    """Windows 기본 설치처럼 numpy가 없을 때. 이미 들여온 모듈이 섞이지 않게 새 프로세스에서 본다."""
+    import sys
+    code = ("import sys; sys.modules['numpy'] = None\n"   # None이면 import numpy가 ModuleNotFoundError
+            "from rec2md import cli\n"
+            "cli.main(['batch', '.', '--dry-run'])")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8", check=False,
+                       cwd=Path(__file__).parent, env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")})
+    assert r.returncode == 1 and "rec2md[batch]" in r.stderr, r.stderr[-500:]

@@ -24,6 +24,9 @@ office = [
     "docxtpl>=0.18",
     "python-docx>=1.1",
 ]
+batch = [
+    "numpy>=1.24",  # 긴 무음 추정(trim). Mac은 mlx-whisper가 이미 끌어온다 → Windows의 `batch --remote`용
+]
 voices = [
     "numpy>=1.24",
     "scipy>=1.10",  # 헝가리안 매칭 (pyannote가 이미 끌어옴)

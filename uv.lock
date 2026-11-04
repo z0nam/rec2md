@@ -2280,6 +2280,10 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+batch = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
 diarize = [
     { name = "pyannote-audio" },
 ]
@@ -2313,6 +2317,7 @@ requires-dist = [
     { name = "docxtpl", marker = "extra == 'office'", specifier = ">=0.18" },
     { name = "jinja2", marker = "extra == 'render'", specifier = ">=3.1" },
     { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.4.2" },
+    { name = "numpy", marker = "extra == 'batch'", specifier = ">=1.24" },
     { name = "numpy", marker = "extra == 'voices'", specifier = ">=1.24" },
     { name = "pillow", marker = "extra == 'export'", specifier = ">=10" },
     { name = "pyannote-audio", marker = "extra == 'diarize'", specifier = ">=4.0" },
@@ -2321,7 +2326,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "scipy", marker = "extra == 'voices'", specifier = ">=1.10" },
 ]
-provides-extras = ["diarize", "render", "export", "office", "voices"]
+provides-extras = ["diarize", "render", "export", "office", "batch", "voices"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -24,8 +24,16 @@ from pathlib import Path
 
 from concurrent.futures import ThreadPoolExecutor
 
-from . import audio, cli, trim
+from . import audio, cli
 from .render import fmt_ts
+
+try:   # 말소리 길이 추정(trim)에 numpy가 든다. Mac은 mlx-whisper가 끌어오지만 Windows 기본 설치엔 없다
+    from . import trim
+except ModuleNotFoundError as e:
+    if e.name != "numpy":
+        raise
+    raise SystemExit('rec2md batch에는 numpy가 필요함 → uv tool install --reinstall '
+                     '"rec2md[batch] @ git+https://github.com/z0nam/rec2md"') from None
 
 MEDIA_EXTS = {".mp3", ".m4a", ".wav", ".mp4", ".mov"}
 STATE_FILE = ".rec2md-state.json"
