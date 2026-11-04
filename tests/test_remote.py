@@ -344,3 +344,23 @@ def test_cli_turns_remote_error_into_exit(tmp_path, monkeypatch):
     src.write_bytes(b"x")
     with pytest.raises(SystemExit, match=r"원격 전사 실패\(job x\)"):
         cli.main([str(src), "--remote", "studio"])
+
+
+def test_run_captured_uses_files_not_pipes(monkeypatch):
+    seen = {}
+    real = subprocess.run
+
+    def spy(argv, **kw):
+        seen.update(kw)
+        return real(argv, **kw)
+    monkeypatch.setattr(remote.subprocess, "run", spy)
+    r = remote.run_captured(["python3", "-c", "import sys; print('한글 ok'); print('err', file=sys.stderr)"])
+    assert r.returncode == 0 and r.stdout == "한글 ok\n" and r.stderr == "err\n"
+    assert seen["stdin"] is subprocess.DEVNULL
+    assert seen["stdout"] not in (subprocess.PIPE, None) and seen["stderr"] not in (subprocess.PIPE, None)
+    assert "capture_output" not in seen
+
+
+def test_run_captured_timeout():
+    r = remote.run_captured(["python3", "-c", "import time; time.sleep(5)"], timeout=0.5)
+    assert r.returncode == 124 and "끝나지 않음" in r.stderr
