@@ -425,7 +425,7 @@ def plan_renames(out: Path, idx: dict) -> list[dict]:
         elif new.casefold() in taken:
             p["skip"] = f"같은 이름 제안이 겹침({taken[new.casefold()]})"
         elif i.get("stale"):
-            p["skip"] = "원본 지문이 바뀜(stale) — 다시 확인 필요"
+            p["skip"] = "원본 지문이 바뀜(stale) — 다시 확인 후 `index set <폴더> <stem> --revalidate`, 그다음 승인"
         if p["skip"] is None:
             taken[new.casefold()] = i["source"]
             p["files"] = [f.name for f in outputs_of(out, i["stem"], stems, sources)]

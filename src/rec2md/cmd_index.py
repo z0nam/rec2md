@@ -2,7 +2,7 @@
 
   rec2md index <폴더> [--media-dir <녹음 폴더>]       # index.json 만들기·갱신 + index.md
   rec2md index set <폴더> <stem|원본> [--date 2099-01-15 --precision day --confidence high
-                   --evidence "…" --topic "…" --attendees 내부회의 --summary "…" --name "…"]
+                   --evidence "…" --topic "…" --attendees 내부회의 --summary "…" --name "…" --revalidate]
   rec2md index approve <폴더> <stem|원본>... | --all-high
   rec2md index rename <폴더> [--apply] [--copy-media <폴더>] [--media-dir <녹음 폴더>]
   rec2md index rename <폴더> --undo [--last N]
@@ -58,6 +58,8 @@ def cmd_set(argv: list[str]) -> None:
     p.add_argument("--attendees", choices=ix.ATTENDEE_TYPES)
     p.add_argument("--summary")
     p.add_argument("--name", help="제안 이름을 직접 지정(기본은 날짜·주제·REC 번호로 만듦)")
+    p.add_argument("--revalidate", action="store_true",
+                   help="stale(원본 지문이 바뀜) 표시를 지움 — 바뀐 원본을 다시 전사·검토한 뒤에만. 승인은 다시 받아야 함")
     a = p.parse_args(argv)
     out = _dir(a.dir)
     idx = ix.load_index(out)
@@ -65,6 +67,8 @@ def cmd_set(argv: list[str]) -> None:
     ix.set_agent(item, date=a.date, date_precision=a.precision, date_confidence=a.confidence,
                  date_evidence=a.evidence, topic=a.topic, attendee_type=a.attendees, summary=a.summary,
                  proposed_name=a.name)
+    if a.revalidate:
+        item["stale"] = False  # 지문은 build가 이미 현재 값으로 갱신해 둠
     item["approved"] = False  # 판단이 바뀌면 승인을 다시 받는다
     ix.save_json(out / ix.INDEX_JSON, idx)
     ix.write_md(out, idx)

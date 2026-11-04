@@ -243,3 +243,29 @@ def test_day_without_confidence_is_downgraded(rec):
     item = ix.find_item(idx, "REC00012")
     ix.set_agent(item, date="2099-01-06", date_precision="day", topic="가상")
     assert item["agent"]["date_precision"] == "month"
+
+
+def test_revalidate_clears_stale_but_not_approval(rec):
+    media, out = rec
+    ix.build(out)
+    _approve(out, "REC00012", date="2099", date_precision="year", date_confidence="low", topic="가상")
+    (media / "REC00012.MP3").write_bytes(b"other recording")
+    ix.build(out)
+    assert ix.find_item(ix.load_index(out), "REC00012")["stale"]
+    index_main(["set", str(out), "REC00012", "--topic", "가상 재검토", "--revalidate"])
+    item = ix.find_item(ix.build(out), "REC00012")
+    assert not item["stale"] and not item["approved"]
+
+
+def test_batch_reserves_renamed_output_stem(rec):
+    from rec2md import cmd_batch
+    media, out = rec
+    ix.build(out)
+    _approve(out, "REC00010", date="2099-03-04", date_precision="day", date_confidence="high", topic="가상")
+    idx = ix.load_index(out)
+    ix.apply_renames(out, idx, ix.plan_renames(out, idx))
+    state = json.loads((out / ".rec2md-state.json").read_text(encoding="utf-8"))
+    newcomer = media / "20990304_가상-REC00010.MP3"  # 새 녹음이 우연히 바뀐 출력 이름과 같다
+    newcomer.write_bytes(b"new")
+    clash = cmd_batch._clashes([media / "REC00010.MP3", newcomer], state)
+    assert newcomer in clash and media / "REC00010.MP3" not in clash
