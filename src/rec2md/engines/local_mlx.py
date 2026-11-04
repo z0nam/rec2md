@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 
 from ..audio import SAMPLE_RATE, load_wav
@@ -10,6 +11,23 @@ from .base import Engine, Region
 
 DEFAULT_MODEL = "mlx-community/whisper-large-v3-turbo"
 PAD = 0.2  # 구간 앞뒤로 붙이는 여유(초). 첫 음절이 잘리지 않게
+# mlx 버퍼 캐시 상한(바이트). mlx 기본값은 메모리 한도와 같아서 다 쓴 버퍼가 캐시로 쌓인다
+# (1시간 전사에서 활성 2.4GB에 캐시 7.5GB). 1GB로 묶어도 전사 시간·결과는 반복 실행의 편차 안이었다.
+# 근거는 docs/PLAN.md "긴 녹음 메모리 실측"
+CACHE_LIMIT = 1 * 2**30
+
+
+@contextmanager
+def _cache_limit(limit: int):
+    """전사하는 동안만 mlx 캐시 상한을 걸고, 끝나면 캐시를 비우고 이전 상한으로 돌린다."""
+    import mlx.core as mx
+
+    prev = mx.set_cache_limit(limit)
+    try:
+        yield
+    finally:
+        mx.set_cache_limit(prev)
+        mx.clear_cache()
 
 
 class LocalMLX(Engine):
@@ -51,6 +69,10 @@ class LocalMLX(Engine):
         except ImportError as e:
             raise SystemExit("local 엔진은 Apple Silicon Mac + mlx-whisper가 필요함. Windows는 --remote studio 사용") from e
 
+        with _cache_limit(CACHE_LIMIT):
+            return self._transcribe(wav, language, regions)
+
+    def _transcribe(self, wav: Path, language: str, regions: list[Region] | None) -> list[Segment]:
         if not regions:
             return self._decode(str(wav), language, 0.0)
 
