@@ -12,6 +12,8 @@
 - 녹음기를 안 꺼서 생긴 긴 무음은 전사 전에 잘라낸다(`trim`, --no-trim으로 끔, 기준 길이는 --trim-min-gap). 그래서 dry-run은 파일 길이와
   함께 소리 크기로 추정한 말소리 길이를 보여 주고, "분할 필요"(6시간 초과)도 말소리 길이로 판단한다.
   잘라낸 뒤에도 6시간이 넘는 파일은 건너뛴다(청크 분할은 아직 없음 — docs/PLAN.md 위시리스트).
+- `--speech-check`: 소리 크기 추정은 지속 소음도 말소리로 센다. 남긴 구간에서 표본 창만 CPU VAD로 들어 말소리 길이를
+  다시 추정하고, 말소리가 드문 파일은 "소음 위주?"로 표시한다(`speechcheck`). 판정·처리 대상은 바꾸지 않는다.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from . import audio, cli
 from .render import fmt_ts
 
 try:   # 말소리 길이 추정(trim)에 numpy가 든다. Mac은 mlx-whisper가 끌어오지만 Windows 기본 설치엔 없다
-    from . import trim
+    from . import speechcheck, trim
 except ModuleNotFoundError as e:
     if e.name != "numpy":
         raise
@@ -52,6 +54,16 @@ class Item:
     sec: float | None
     plan: str
     speech: float | None = None   # 긴 무음을 뺀 추정 말소리 길이(초)
+    ratio: float | None = None    # --speech-check: 남긴 구간 중 VAD가 말소리로 본 비율
+
+    @property
+    def vad_speech(self) -> float | None:
+        """VAD로 보정한 말소리 길이(초)."""
+        return None if self.ratio is None or self.speech is None else self.speech * self.ratio
+
+    @property
+    def noisy(self) -> bool:
+        return self.ratio is not None and self.ratio < speechcheck.NOISY
 
     @property
     def work(self) -> float:
@@ -125,8 +137,9 @@ def _same_source(f: Path, name: str, rec: dict) -> bool:
 
 
 def plan(files: list[Path], state: dict, min_sec: float, estimate: bool = True,
-         min_gap: float = trim.MIN_GAP) -> list[Item]:
-    """파일마다 판정. `estimate`면 처리할 파일의 말소리 길이를 추정해 분할 필요 여부를 그것으로 정한다."""
+         min_gap: float = trim.MIN_GAP, speech_check: bool = False) -> list[Item]:
+    """파일마다 판정. `estimate`면 처리할 파일의 말소리 길이를 추정해 분할 필요 여부를 그것으로 정한다.
+    `speech_check`면 처리할 파일마다 VAD 표본으로 말소리 비율도 잰다(판정은 바꾸지 않음)."""
     items = _plan_by_length(files, state, min_sec)
     todo = [i for i in items if i.plan in (TODO, RETRY, SPLIT)]
     if estimate and todo:
@@ -139,7 +152,29 @@ def plan(files: list[Path], state: dict, min_sec: float, estimate: bool = True,
         elif i.plan == SPLIT:  # 길이는 MAX_SEC를 넘지만 말소리는 그 안
             st = state.get(i.path.name, {}).get("status")
             i.plan = RETRY if st == "failed" else TODO
+    if speech_check:
+        _check_speech([i for i in todo if i.plan in (TODO, RETRY)], min_gap, trimmed=estimate)
     return items
+
+
+def _check_speech(items: list[Item], min_gap: float, trimmed: bool = True) -> None:
+    """VAD 모델 하나를 차례로 돌린다(CPU, 동시 실행하지 않음). 쓸 수 없으면 알리고 넘어간다."""
+    if not items:
+        return
+    if not speechcheck.available():
+        cli.log("--speech-check: pyannote 또는 HF_TOKEN이 없어 VAD 보정을 건너뜀 (소리 크기 추정만 씀)")
+        return
+    for n, item in enumerate(items, 1):
+        cli.log(f"말소리 확인 [{n}/{len(items)}] {item.path.name}")
+        try:
+            r = speechcheck.speech_ratio(item.path, min_gap, trimmed=trimmed)
+        except Exception as e:  # 보정은 보조 정보라 실패해도 계획은 그대로
+            cli.log(f"말소리 확인 실패: {item.path.name} — {type(e).__name__}: {e}")
+            continue
+        if r is not None:
+            kept, item.ratio = r
+            if item.speech is None:
+                item.speech = kept
 
 
 def _safe_speech(path: Path, min_gap: float = trim.MIN_GAP) -> float | None:
@@ -178,9 +213,13 @@ def report(items: list[Item]) -> str:
     """dry-run 표: 파일별 길이와 판정, 처리 대상 총 길이와 local 예상 처리시간."""
     w = max([len(i.path.name) for i in items] + [4])
     ts = lambda x: fmt_ts(x) if x is not None else "-"  # noqa: E731
-    lines = [f"{'파일':<{w}}  {'길이':>8}  {'말소리':>8}  판정", "-" * (w + 30)]
+    checked = any(i.ratio is not None for i in items)
+    vad_col = f"  {'VAD':>8}" if checked else ""
+    lines = [f"{'파일':<{w}}  {'길이':>8}  {'말소리':>8}{vad_col}  판정", "-" * (w + 30 + len(vad_col))]
     for i in items:
-        lines.append(f"{i.path.name:<{w}}  {ts(i.sec):>8}  {ts(i.speech):>8}  {i.plan}")
+        vad = f"  {ts(i.vad_speech):>8}" if checked else ""
+        flag = " · 소음 위주?" if i.noisy else ""
+        lines.append(f"{i.path.name:<{w}}  {ts(i.sec):>8}  {ts(i.speech):>8}{vad}  {i.plan}{flag}")
     todo = [i for i in items if i.plan in (TODO, RETRY)]
     total = sum(i.work for i in todo)
     cut = sum((i.sec or 0) - i.work for i in todo)
@@ -190,6 +229,12 @@ def report(items: list[Item]) -> str:
               f" (실시간 {LOCAL_SPEED:g}배 가정)"]
     if cut > 0:
         lines.append(f"긴 무음 {fmt_ts(cut)}는 전사 전에 잘라냄(말소리 길이는 소리 크기로 추정)")
+    if checked:
+        noisy = [i for i in todo if i.noisy]
+        vad_total = sum(i.vad_speech if i.vad_speech is not None else i.work for i in todo)
+        lines.append(f"VAD 표본으로 본 말소리 총 {fmt_ts(vad_total)}"
+                     + (f" · 소음 위주로 보이는 {len(noisy)}개(말소리 {speechcheck.NOISY:.0%} 미만)는 전사 전에 확인 권장"
+                        if noisy else ""))
     if counts[SPLIT]:
         lines.append(f"무음을 빼고도 {fmt_ts(MAX_SEC)}를 넘는 {counts[SPLIT]}개는 분할이 필요해 이번에는 건너뜀"
                      "(청크 분할은 아직 없음)")
@@ -204,6 +249,9 @@ def main(argv: list[str]) -> None:
     p.add_argument("dir", type=Path, help="녹음 파일이 있는 폴더 (하위 폴더는 보지 않음)")
     p.add_argument("--dry-run", action="store_true", help="파일별 길이·건너뛸 것·예상 처리시간만 보고 끝냄")
     p.add_argument("--min-sec", type=float, default=30.0, help="이보다 짧은 파일은 건너뜀 (기본 30초)")
+    p.add_argument("--speech-check", action="store_true",
+                   help="남긴 구간을 표본 VAD(CPU)로 들어 말소리 길이를 다시 추정하고 소음 위주 파일을 표시 "
+                        "(파일당 약 30초, pyannote·HF_TOKEN 필요)")
     args = p.parse_args(argv)
 
     src_dir: Path = args.dir
@@ -217,7 +265,8 @@ def main(argv: list[str]) -> None:
     files = media_files(src_dir)
     if not files:
         raise SystemExit(f"처리할 녹음·영상이 없음: {src_dir} ({', '.join(sorted(MEDIA_EXTS))})")
-    items = plan(files, state, args.min_sec, estimate=not args.no_trim, min_gap=cli.trim_min_gap(args))
+    items = plan(files, state, args.min_sec, estimate=not args.no_trim, min_gap=cli.trim_min_gap(args),
+                 speech_check=args.speech_check)
     print(report(items))
     if args.dry_run:
         return

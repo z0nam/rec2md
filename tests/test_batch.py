@@ -278,3 +278,52 @@ def test_dense_recording_up_to_max_is_processed(folder, calls, capsys):
 def test_trim_min_gap_reaches_speech_estimate(folder, capsys):
     cmd_batch.main([str(folder), "--dry-run", "--trim-min-gap", "2"])
     assert GAPS and set(GAPS) == {120.0}
+
+
+@pytest.fixture
+def vad(monkeypatch):
+    """--speech-check의 VAD 대신 파일별 말소리 비율을 돌려준다. 호출(이름, trimmed)을 기록한다."""
+    ratios = {"a_meeting.mp3": 0.8, "b_call.M4A": 0.05}
+    seen: list[tuple[str, bool]] = []
+
+    def ratio(path, min_gap=trim.MIN_GAP, n=12, trimmed=True):
+        seen.append((path.name, trimmed))
+        return SPEECH.get(path.name, LENGTHS[path.name]), ratios[path.name]
+
+    monkeypatch.setattr(cmd_batch.speechcheck, "available", lambda: True)
+    monkeypatch.setattr(cmd_batch.speechcheck, "speech_ratio", ratio)
+    return seen
+
+
+def test_speech_check_corrects_estimate_and_flags_noise(folder, calls, vad, capsys):
+    """소리 크기로는 10분이 남는 통화도 표본 VAD 말소리가 5%면 30초로 보고 "소음 위주?"로 표시한다.
+    처리 대상과 판정은 바꾸지 않는다."""
+    cmd_batch.main([str(folder), "--dry-run", "--speech-check"])
+    lines = capsys.readouterr().out.splitlines()
+    assert "VAD" in lines[0]
+    meeting = next(line for line in lines if line.startswith("a_meeting.mp3"))
+    call = next(line for line in lines if line.startswith("b_call.M4A"))
+    assert "00:24:00" in meeting and meeting.endswith(cmd_batch.TODO)
+    assert "00:00:30" in call and call.endswith(f"{cmd_batch.TODO} · 소음 위주?")
+    assert any("VAD 표본으로 본 말소리 총 00:24:30" in line and "소음 위주로 보이는 1개" in line for line in lines)
+    # 처리 대상(짧음·분할 필요·길이 확인 실패 제외)만 확인한다
+    assert sorted(name for name, _ in vad) == ["a_meeting.mp3", "b_call.M4A"]
+    assert calls[0] == []
+
+
+def test_speech_check_follows_no_trim(folder, vad, capsys):
+    cmd_batch.main([str(folder), "--dry-run", "--speech-check", "--no-trim"])
+    assert vad and all(trimmed is False for _, trimmed in vad)
+
+
+def test_speech_check_without_vad_keeps_plain_report(folder, monkeypatch, capsys):
+    monkeypatch.setattr(cmd_batch.speechcheck, "available", lambda: False)
+    cmd_batch.main([str(folder), "--dry-run", "--speech-check"])
+    captured = capsys.readouterr()
+    assert "VAD" not in captured.out.splitlines()[0]
+    assert "VAD 보정을 건너뜀" in captured.out + captured.err
+
+
+def test_speech_check_off_by_default(folder, monkeypatch, capsys):
+    monkeypatch.setattr(cmd_batch.speechcheck, "available", lambda: pytest.fail("기본은 VAD를 쓰지 않음"))
+    cmd_batch.main([str(folder), "--dry-run"])

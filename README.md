@@ -62,6 +62,7 @@ rec2md long.mp3 --trim-min-gap 10  # 10분 이상 이어진 무음만 자름 (�
 
 ```sh
 rec2md batch ~/녹음 --dry-run      # 파일별 길이·추정 말소리 길이·판정·예상 처리시간만 보기
+rec2md batch ~/녹음 --dry-run --speech-check   # 표본 VAD(CPU, 파일당 약 30초)로 말소리 다시 추정, 소음 위주 파일 표시
 rec2md batch ~/녹음                # 차례로 전사 → ~/녹음/_transcripts/, 중단 후 같은 명령으로 이어서
                                    # --no-trim·--trim-min-gap도 그대로 받는다(dry-run 추정에도 반영)
 ```
