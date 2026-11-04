@@ -39,6 +39,7 @@ rec2md <audio> [--engine local|rtzr|clova]  # 기본 local [--call] [--speakers 
   - ssh가 끊겨도 원격 처리는 계속되고 `rec2md remote fetch <job>`으로 나중에 받는다. 원격 job끼리는 flock으로 한 번에 하나, 락 밖 rec2md는 경고만.
   - 디스크: 올리기 전 여유 ≥ 크기×3 확인. 원본(in/)은 성공·실패 모두 끝나자마자 지우고, 실패 job은 로그·상태만 7일 보관, 받지 않은 성공 결과는 fetch까지 보관.
   - `--series`·목소리 DB는 studio 것, `--context` 파일은 같이 올린다. `batch --remote`는 파일마다 job 하나(상태 파일은 로컬).
+  - Windows 실측(2026-11-04, namun-ji → studio, 합성 음성 16초): 단일 17초, `batch --remote` 1개 done. 이때 찾은 것: ① Windows ssh.exe는 stdout이 파이프면 원격 명령이 끝나도 종료하지 않는다 → 출력을 임시 파일로 받는다(`remote.run_captured`). ② Windows 기본 설치엔 numpy가 없어 batch(trim)가 못 돈다 → `batch` extra. ③ ssh로 들어온 세션의 프로세스는 winget `Links\ffprobe.exe` 심링크를 못 따라간다(WinError 448) → `audio._require`가 심링크 대상을 직접 찾는다.
   - 함정(실측): namun-ji 기본 셸은 PowerShell 5.1이라 `&` 연결이 안 되고, ssh를 `-n` 없이 부르면 stdin을 기다리며 멈춘다. studio 비대화형 ssh의 PATH는 `/usr/bin:/bin:/usr/sbin:/sbin`뿐이라 rec2md는 `~/.local/bin/rec2md` 경로로 부르고, 원격 쪽에서 `/opt/homebrew/bin`(ffmpeg) 등을 PATH에 붙인다. 한글·공백 파일명은 scp 양방향 그대로 유지됨.
 - **방침: 로컬 우선, 클라우드는 기준점·보조** (2026-10-16 변경). 처음엔 클라우드 우선이었으나, studio가 로컬 엔진을 충분히 돌릴 수 있고 클라우드 무료 한도(RTZR 계정당 10시간)로는 188시간 백로그를 감당할 수 없어 뒤집음.
 - 클라우드는 (1) 파일럿에서 로컬 품질을 재는 기준점, (2) 로컬이 크게 밀리는 유형(전화·잡음 현장 등)에 한해 선택 사용.
@@ -251,7 +252,7 @@ leave-one-out: 녹취 하나를 빼고 나머지의 정답 클러스터(30초 �
 1. 짧은 샘플(1~2분)로 엔진마다 `rec2md sample.m4a --engine X`를 실행해 segments.json 스키마가 맞고 화자 라벨이 붙는지 확인.
 2. 실제 회의 녹취(30~60분)와 전화 녹취 각 1건으로 엔진 3개를 비교한다. 비교 항목은 인명·전문용어 오인식, 화자 혼동, 처리시간, 비용이고, 표로 정리해서 local 기본 유지 여부와 클라우드를 쓸 유형을 정함.
 3. Claude Code에서 "이 녹취 풀어줘 <경로>"라고 하면 스킬이 트리거되어 녹취록.md와 요약까지 한 번에 나오는지 확인.
-4. Windows에서 `--remote studio` 왕복이 동작하는지 확인. studio → studio 자기 자신 왕복(합성 음성 16초, 단일·batch)은 확인(2026-11-04). namun-ji는 설치 후 확인.
+4. ~~Windows에서 `--remote studio` 왕복이 동작하는지 확인~~ 완료(2026-11-04): namun-ji → studio, 합성 음성 16초로 단일·`batch --remote` 모두 결과 회수와 원격 정리 확인.
 
 ### 회의 구간 추정 1차 (2026-10-30, `rec2md bounds`, `src/rec2md/bounds.py`)
 녹음기를 늦게 켜거나 안 꺼서 앞뒤에 붙은 잡담·통화를 `meta.meeting_bounds`에 후보로 남긴다. 신호는 종료·개회 표현, 발화 밀도 하락, 화자 구성 변화(한 화자 독차지, 말하는 사람 수 급감, 회의 화자 비중 하락), 긴 무음이다. 창 신호는 경계보다 늦게 잡히므로 종료 표현이 있으면 그 발화 끝으로 당기고, 최고점의 80% 이상인 후보 중 회의에 가장 가까운 시각을 고른다.
