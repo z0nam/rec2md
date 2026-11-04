@@ -209,3 +209,37 @@ def test_weekday_years():
     t = Transcript("x", 60, "local", "ko", [Segment(0, 5, "3월 4일 수요일에 봅시다")])
     c = [c for c in ix.find_clues(t) if c["kind"] == "date"][0]
     assert c["weekday"] == "수" and isinstance(c["years"], list)
+
+
+def test_rename_never_touches_media_beside_outputs(tmp_path):
+    # rec2md <파일>의 기본처럼 출력이 원본 옆에 있는 경우: 원본 미디어는 계획에서 빠진다
+    d = tmp_path / "rec"
+    d.mkdir()
+    (d / "REC00010.MP3").write_bytes(b"audio")
+    (d / "REC00010.wav").write_bytes(b"audio2")
+    write_seg(d, "REC00010", "REC00010.MP3")
+    ix.build(d)
+    _approve(d, "REC00010", date="2099-03-04", date_precision="day", date_confidence="high", topic="가상")
+    idx = ix.load_index(d)
+    plans = ix.plan_renames(d, idx)
+    assert not any(f.lower().endswith((".mp3", ".wav")) for f in plans[0]["files"])
+    ix.apply_renames(d, idx, plans)
+    assert (d / "REC00010.MP3").read_bytes() == b"audio" and (d / "REC00010.wav").exists()
+
+
+def test_fingerprint_covers_tail_between_1_and_2_mib(tmp_path):
+    p = tmp_path / "a.mp3"
+    body = bytearray(b"\0" * (ix.FP_CHUNK + 1000))
+    p.write_bytes(bytes(body))
+    before = ix.fingerprint(p)
+    body[-1] = 1  # 같은 크기, 꼬리만 바뀜
+    p.write_bytes(bytes(body))
+    assert ix.fingerprint(p) != before
+
+
+def test_day_without_confidence_is_downgraded(rec):
+    _, out = rec
+    idx = ix.build(out)
+    item = ix.find_item(idx, "REC00012")
+    ix.set_agent(item, date="2099-01-06", date_precision="day", topic="가상")
+    assert item["agent"]["date_precision"] == "month"

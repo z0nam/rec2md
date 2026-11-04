@@ -27,7 +27,9 @@ from pathlib import Path
 from .segments import Transcript
 
 INDEX_JSON, INDEX_MD, RENAMES = "index.json", "index.md", ".rec2md-renames.json"
-STATE_FILE = ".rec2md-state.json"  # cmd_batch.STATE_FILE과 같다(순환 import를 피하려고 따로 둠)
+STATE_FILE = ".rec2md-state.json"
+# 이름 바꾸기에서 절대 건드리지 않는 미디어 확장자(cmd_batch.MEDIA_EXTS보다 넓게)
+MEDIA_EXTS = {".mp3", ".m4a", ".wav", ".mp4", ".mov", ".aac", ".flac", ".ogg", ".opus", ".wma", ".webm", ".mkv"}  # cmd_batch.STATE_FILE과 같다(순환 import를 피하려고 따로 둠)
 SEG_SUFFIX = ".segments.json"
 FP_CHUNK = 1 << 20
 
@@ -99,8 +101,8 @@ def fingerprint(path: Path) -> str | None:
         h = hashlib.sha1(str(size).encode())
         with path.open("rb") as f:
             h.update(f.read(FP_CHUNK))
-            if size > 2 * FP_CHUNK:
-                f.seek(-FP_CHUNK, os.SEEK_END)
+            if size > FP_CHUNK:  # 1〜2MB면 앞 1MB 뒤의 나머지 전부
+                f.seek(max(FP_CHUNK, size - FP_CHUNK))
                 h.update(f.read(FP_CHUNK))
         return f"{size}:{h.hexdigest()[:16]}"
     except OSError:
@@ -328,7 +330,7 @@ def set_agent(item: dict, **fields) -> None:
             raise SystemExit("날짜는 YYYY-MM-DD, YYYY-MM, YYYY 중 하나")
         a[k] = v
     # 확신도가 high가 아니면 일 단위 날짜를 쓰지 않는다(틀린 날짜를 단정하지 않게 정밀도를 내린다)
-    if a.get("date_precision") == "day" and a.get("date_confidence") not in (None, "high"):
+    if a.get("date_precision") == "day" and a.get("date_confidence") != "high":
         a["date_precision"] = "month"
 
 
@@ -387,13 +389,17 @@ def write_md(out: Path, idx: dict) -> Path:
 
 # ── 이름 바꾸기 ───────────────────────────────────────────────────────────
 
-def outputs_of(out: Path, stem: str, stems: set[str]) -> list[Path]:
-    """`<stem>.`으로 시작하는 출력 파일. 더 긴 다른 stem(`회의.v1`)의 파일은 그쪽 것으로 본다."""
+def outputs_of(out: Path, stem: str, stems: set[str], sources: set[str] = frozenset()) -> list[Path]:
+    """`<stem>.`으로 시작하는 출력 파일. 더 긴 다른 stem(`회의.v1`)의 파일은 그쪽 것으로 본다.
+    전사 출력이 원본 옆에 있을 수 있으므로(`rec2md <파일>`의 기본) 원본 미디어와 미디어 확장자 파일은 뺀다."""
     longer = [s for s in stems if s != stem and s.startswith(stem + ".")]
     res = []
     for p in out.iterdir():
-        if p.is_file() and p.name.startswith(stem + ".") and not any(p.name.startswith(s + ".") for s in longer):
-            res.append(p)
+        if not (p.is_file() and p.name.startswith(stem + ".")) or any(p.name.startswith(s + ".") for s in longer):
+            continue
+        if p.name in sources or p.suffix.lower() in MEDIA_EXTS:
+            continue
+        res.append(p)
     return sorted(res)
 
 
@@ -401,6 +407,7 @@ def plan_renames(out: Path, idx: dict) -> list[dict]:
     """승인된 항목의 이름 바꾸기 계획. 문제가 있으면 그 항목은 skip 사유를 단다."""
     items = [i for i in idx["items"] if not i.get("missing")]
     stems = {i["stem"] for i in items}
+    sources = {i["source"] for i in idx["items"]}
     existing = {p.name.casefold() for p in out.iterdir()}
     plans, taken = [], {}
     for i in items:
@@ -421,7 +428,7 @@ def plan_renames(out: Path, idx: dict) -> list[dict]:
             p["skip"] = "원본 지문이 바뀜(stale) — 다시 확인 필요"
         if p["skip"] is None:
             taken[new.casefold()] = i["source"]
-            p["files"] = [f.name for f in outputs_of(out, i["stem"], stems)]
+            p["files"] = [f.name for f in outputs_of(out, i["stem"], stems, sources)]
             targets = [new + f[len(i["stem"]):] for f in p["files"]]
             clash = [t for t in targets if t.casefold() in existing]
             if clash:
