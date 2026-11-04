@@ -87,9 +87,15 @@ def _clashes(files: list[Path], state: dict) -> set[Path]:
     # 같은 출력 폴더를 다른 원본이 이미 썼다: 출력 이름(stem)이 같은 기록이 이 파일 것이 아니면 겹침.
     # 이 파일 것인지는 source 경로로, source가 없는 예전 기록은 파일명으로 판단한다
     for name, rec in state.items():
+        rec = rec if isinstance(rec, dict) else {}
         for f in by_stem.get(Path(name).stem.casefold(), []):
-            if not _same_source(f, name, rec if isinstance(rec, dict) else {}):
+            if not _same_source(f, name, rec):
                 out.add(f)
+        # `rec2md index rename`이 출력 이름을 바꾼 기록: 키(원본 이름)는 그대로 두고 바뀐 출력 이름도 예약한다
+        if rec.get("outputs"):
+            for f in by_stem.get(str(rec["outputs"]).casefold(), []):
+                if f.name != name:
+                    out.add(f)
     return out
 
 
@@ -227,6 +233,8 @@ def main(argv: list[str]) -> None:
 
     clashed = [i.path.name for i in items if i.plan == CLASH]
     cli.log(f"끝: 처리 {len(todo) - failed}개, 실패 {failed}개, 이름 겹침 {len(clashed)}개 → {out}")
+    if todo:
+        cli.log(f"색인(날짜·주제·제안 이름 표): rec2md index {out}")
     if failed:
         raise SystemExit(f"실패 {failed}개 — 같은 명령을 다시 실행하면 실패한 것만 다시 시도함 ({state_path})")
     if clashed:
