@@ -26,3 +26,23 @@ def test_normalize_audio(tmp_path: Path):
     assert out.stat().st_size > 0
     duration = probe_duration(out)
     assert duration > 0
+
+
+def test_link_target_follows_path_symlink(tmp_path, monkeypatch):
+    """winget Links처럼 PATH에 심링크만 있고 shutil.which가 못 찾는 경우(ssh 세션의 WinError 448)."""
+    import os
+
+    import pytest
+
+    from rec2md import audio
+    real = tmp_path / "pkg" / "fakeprobe"
+    real.parent.mkdir()
+    real.write_text("#!/bin/sh\n")
+    links = tmp_path / "Links"
+    links.mkdir()
+    (links / "fakeprobe").symlink_to(real)
+    monkeypatch.setenv("PATH", str(links) + os.pathsep + os.environ.get("PATH", ""))
+    monkeypatch.setattr(audio.shutil, "which", lambda t: None)
+    assert audio._require("fakeprobe") == str(real)
+    with pytest.raises(SystemExit, match="PATH에 없음"):
+        audio._require("없는도구")

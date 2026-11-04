@@ -77,7 +77,7 @@ rec2md remote list                             # 원격 job 상태
 rec2md remote fetch <job>                      # 연결이 끊겨 중단됐으면 나중에 받기(원격 처리는 계속 돈다)
 ```
 
-- 준비: 양쪽에 rec2md 설치(Windows는 기본 extra만, ffmpeg 필요), 이쪽에서 `ssh <host>`가 키로 바로 되어야 한다.
+- 준비: 양쪽에 rec2md 설치, 이쪽에서 `ssh <host>`가 키로 바로 되어야 한다. Windows는 ffmpeg(`winget install Gyan.FFmpeg`)와 `uv tool install "rec2md[batch] @ git+https://github.com/z0nam/rec2md"`(`batch` extra는 numpy, 단일 파일만 맡길 거면 extra 없이도 됨).
 - 전사 옵션은 그대로 넘어간다. `--series`·목소리 DB는 **맡긴 맥의 것**을 쓰고, `--context` 파일은 함께 올린다.
 - 맡긴 맥에는 `~/.cache/rec2md/remote/<job>/`가 생긴다. 원본은 처리가 끝나면 바로 지우고, 성공한 job은 결과를 받은 뒤 통째로 지운다. 실패한 job은 로그만 7일 남는다. 끝났는데 아직 받지 않은 결과는 `fetch`할 때까지 남긴다.
 - 올리기 전에 여유 공간이 파일 크기의 3배 이상인지 본다. 원격 job끼리는 하나씩 차례로 돌고, 따로 돌고 있는 rec2md가 있으면 경고한다.

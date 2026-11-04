@@ -19,6 +19,7 @@
   비대화형 ssh의 PATH에는 ~/.local/bin이 없어 실행 파일을 경로로 부른다(기본 `.local/bin/rec2md`,
   홈 기준 상대경로. 바꾸려면 REC2MD_REMOTE_BIN).
 - ssh·scp는 셸 없이 인자 리스트로 부르고 stdin을 막는다(Windows OpenSSH는 -n 없이 부르면 입력을 기다리며 멈춘다).
+  출력은 파이프가 아닌 임시 파일로 받는다(Windows ssh.exe는 stdout이 파이프면 끝나지 않는다, run_captured).
 """
 
 from __future__ import annotations
@@ -71,20 +72,40 @@ def remote_bin() -> str:
 # ---------------------------------------------------------------- 로컬 쪽
 
 Run = Callable[..., subprocess.CompletedProcess]
+SSH_TIMEOUT = 300.0               # 짧은 ssh 명령(준비·상태·정리) 한 번의 상한. 넘으면 연결 실패로 본다
+
+
+def run_captured(argv: list[str], timeout: float | None = None, **_) -> subprocess.CompletedProcess:
+    """출력을 파이프가 아닌 임시 파일로 받는다.
+
+    Windows OpenSSH의 ssh.exe는 stdout이 파이프면 원격 명령이 끝나도 종료하지 않는다(namun-ji 실측
+    2026-11-04: 파일로 돌리면 0.2초, 파이프면 무한 대기. stdin을 DEVNULL·빈 입력·상속으로 바꿔도 같음).
+    """
+    import tempfile
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        try:
+            code = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=err, timeout=timeout,
+                                  check=False).returncode
+        except subprocess.TimeoutExpired:
+            code = 124
+            err.write(f"\n{timeout:.0f}초 안에 끝나지 않음".encode())
+        out.seek(0)
+        err.seek(0)
+        dec = lambda b: b.decode("utf-8", "replace")
+        return subprocess.CompletedProcess(argv, code, dec(out.read()), dec(err.read()))
 
 
 @dataclass
 class Host:
     """ssh/scp 호출. run은 테스트에서 가짜로 바꾼다."""
     name: str
-    run: Run = field(default=subprocess.run)
+    run: Run = field(default=run_captured)
 
     def ssh(self, *words: str, raw: str = "", prefix: str = "", check: bool = True) -> subprocess.CompletedProcess:
         """원격 rec2md에 인자를 넘긴다. words는 POSIX 인용, prefix·raw는 앞뒤에 그대로 붙인다."""
         cmd = " ".join([*([prefix] if prefix else []), remote_bin(), *map(shlex.quote, words)])
         cmd += f" {raw}" if raw else ""
-        r = self.run(["ssh", "-n", *SSH_OPTS, self.name, cmd], stdin=subprocess.DEVNULL,
-                     capture_output=True, text=True, encoding="utf-8", errors="replace")
+        r = self.run(["ssh", "-n", *SSH_OPTS, self.name, cmd], stdin=subprocess.DEVNULL, timeout=SSH_TIMEOUT)
         if check and r.returncode != 0:
             raise RemoteError(f"원격 명령 실패({self.name}, exit {r.returncode}): {(r.stderr or r.stdout).strip()}")
         return r
@@ -97,8 +118,7 @@ class Host:
             raise RemoteError(f"원격 응답을 읽을 수 없음: {r.stdout.strip()[:200]} {r.stderr.strip()[:200]}") from None
 
     def scp(self, srcs: list[str], dst: str, recursive: bool = False) -> None:
-        r = self.run(["scp", *SSH_OPTS, *(["-r"] if recursive else []), *srcs, dst], stdin=subprocess.DEVNULL,
-                     capture_output=True, text=True, encoding="utf-8", errors="replace")
+        r = self.run(["scp", *SSH_OPTS, *(["-r"] if recursive else []), *srcs, dst], stdin=subprocess.DEVNULL)
         if r.returncode != 0:
             raise RemoteError(f"파일 전송 실패(exit {r.returncode}): {r.stderr.strip()}")
 
