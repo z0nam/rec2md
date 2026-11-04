@@ -13,7 +13,8 @@
 - 원격 job끼리는 `remote/.lock`(flock)으로 한 번에 하나씩 돈다. 락 밖의 rec2md(직접 돌린 batch 등)와는
   겹칠 수 있어 시작할 때 경고만 한다.
 - 디스크: 올리기 전에 여유 공간이 원본·자료 크기의 3배 이상인지 본다. 성공한 job은 회수 뒤 통째로 지우고,
-  실패한 job은 로그·상태만 7일 남긴다(원본은 로컬에 있다). 7일 지난 job은 다음 실행 때 지운다.
+  실패한 job은 로그·상태만 7일 남긴다(원본은 로컬에 있다). 7일 지난 실패·고아 job은 다음 실행 때 지우고,
+  끝났지만 아직 받지 않은 결과와 돌고 있는 job은 남긴다.
 - 원격 쪽 명령은 원격 rec2md의 숨은 서브커맨드(`rec2md remote _prepare|_run|_status|_clean`)다.
   비대화형 ssh의 PATH에는 ~/.local/bin이 없어 실행 파일을 경로로 부른다(기본 `.local/bin/rec2md`,
   홈 기준 상대경로. 바꾸려면 REC2MD_REMOTE_BIN).
@@ -49,8 +50,8 @@ def log(msg: str) -> None:
     print(f"[rec2md] {msg}", file=sys.stderr, flush=True)
 
 
-class RemoteError(SystemExit):
-    pass
+class RemoteError(RuntimeError):
+    """원격 처리 실패. 일반 예외라 batch가 파일별 실패로 잡는다. 단일 실행은 cli.main이 SystemExit로 바꾼다."""
 
 
 def new_job_id() -> str:
@@ -278,14 +279,25 @@ def extend_path(env: dict) -> None:
     env["PATH"] = os.pathsep.join([*filter(None, have), *(d for d in EXTRA_PATH if d not in have)])
 
 
+def _keep(d: Path) -> bool:
+    """아직 받지 않은 성공 결과와 돌고 있는 job은 오래돼도 남긴다(원본은 이미 지워져 크기가 작다)."""
+    try:
+        st = json.loads((d / "status.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if st.get("state") == "done":
+        return True
+    return st.get("state") in ("waiting", "running") and "pid" in st and _alive(st["pid"])
+
+
 def sweep(root: Path, keep_days: float = KEEP_DAYS, now: float | None = None) -> int:
-    """keep_days보다 오래된 job 폴더를 지운다."""
+    """keep_days보다 오래된 실패·고아 job 폴더를 지운다."""
     if not root.is_dir():
         return 0
     cutoff = (now or time.time()) - keep_days * 86400
     n = 0
     for d in root.iterdir():
-        if d.is_dir() and not d.name.startswith(".") and d.stat().st_mtime < cutoff:
+        if d.is_dir() and not d.name.startswith(".") and d.stat().st_mtime < cutoff and not _keep(d):
             shutil.rmtree(d, ignore_errors=True)
             n += 1
     return n

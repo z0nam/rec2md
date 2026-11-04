@@ -181,14 +181,30 @@ def test_not_enough_space(tmp_path, net, monkeypatch):
 
 def test_sweep_old_jobs(tmp_path):
     root = tmp_path / "r"
-    old, new, lock = root / "20200101-000000-aaaaaa", root / "20991231-000000-bbbbbb", root / ".lock"
-    old.mkdir(parents=True)
-    new.mkdir()
-    lock.write_text("")
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    jobs = {   # 이름: (status, 지워져야 하나)
+        "old-failed": ({"state": "failed"}, True),
+        "old-nostatus": (None, True),
+        "old-dead": ({"state": "running", "pid": dead.pid}, True),
+        "old-done": ({"state": "done", "exit": 0}, False),         # 아직 안 받은 결과
+        "old-running": ({"state": "running", "pid": os.getpid()}, False),
+    }
     t = time.time() - 8 * 86400
-    os.utime(old, (t, t))
-    assert remote.sweep(root) == 1
-    assert not old.exists() and new.exists() and lock.exists()
+    for name, (st, _) in jobs.items():
+        d = root / name
+        d.mkdir(parents=True)
+        if st is not None:
+            (d / "status.json").write_text(json.dumps(st))
+        os.utime(d, (t, t))
+    new = root / "new-failed"
+    new.mkdir()
+    (new / "status.json").write_text('{"state": "failed"}')
+    (root / ".lock").write_text("")
+    assert remote.sweep(root) == 3
+    for name, (_, gone) in jobs.items():
+        assert (root / name).exists() != gone, name
+    assert new.exists() and (root / ".lock").exists()
 
 
 def test_status_reads_whole_lines_only(net):
@@ -256,7 +272,7 @@ def test_fetch_after_drop(tmp_path, net, monkeypatch, capsys):
     out = tmp_path / "o"
     with pytest.raises(remote.RemoteError) as e:
         run(src, ["--out", str(out)], net)
-    job = str(e.value.code).split("rec2md remote fetch ")[1].rstrip("`")
+    job = str(e.value).split("rec2md remote fetch ")[1].rstrip("`")
     rec = remote.load_record(job)
     assert rec["host"] == "studio" and Path(rec["out"]) == out.resolve()
     raw = remote.wait_and_fetch(remote.Host("studio", run=net), job, Path(rec["out"]), rec["stem"], poll=0,
@@ -295,3 +311,36 @@ def test_other_rec2md_ignores_shell_strings(monkeypatch):
     monkeypatch.setattr(remote.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 0, ps, ""))
     found = remote.other_rec2md()
     assert len(found) == 1 and "batch" in found[0]
+
+
+def test_batch_continues_after_remote_failure(tmp_path, monkeypatch):
+    from rec2md import cmd_batch
+    d = tmp_path / "in"
+    d.mkdir()
+    for n in ("a.wav", "b.wav"):
+        (d / n).write_bytes(b"x")
+    monkeypatch.setattr(cmd_batch.audio, "probe_duration", lambda p: 60.0)
+    monkeypatch.setattr(cmd_batch, "speech_sec", lambda p, g=None: 60.0)
+    tried = []
+
+    def fake(src, args):
+        tried.append(src.name)
+        raise remote.RemoteError("원격 전사 실패")
+    monkeypatch.setattr(remote, "run_remote", fake)
+    try:
+        cmd_batch.main([str(d), "--remote", "studio"])
+    except SystemExit:
+        pass
+    assert tried == ["a.wav", "b.wav"], "한 파일이 원격에서 실패해도 다음 파일로 넘어간다"
+    state = json.loads((d / "_transcripts" / ".rec2md-state.json").read_text(encoding="utf-8"))
+    assert {k: v["status"] for k, v in state.items()} == {"a.wav": "failed", "b.wav": "failed"}
+
+
+def test_cli_turns_remote_error_into_exit(tmp_path, monkeypatch):
+    def fail(src, args):
+        raise remote.RemoteError("원격 전사 실패(job x)")
+    monkeypatch.setattr(remote, "run_remote", fail)
+    src = tmp_path / "a.mp3"
+    src.write_bytes(b"x")
+    with pytest.raises(SystemExit, match=r"원격 전사 실패\(job x\)"):
+        cli.main([str(src), "--remote", "studio"])

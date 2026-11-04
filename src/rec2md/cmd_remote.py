@@ -58,6 +58,13 @@ def _host(a) -> remote.Host:
 
 
 def main(argv: list[str]) -> None:
+    try:
+        _main(argv)
+    except remote.RemoteError as e:
+        raise SystemExit(str(e)) from None
+
+
+def _main(argv: list[str]) -> None:
     if argv and argv[0].startswith("_"):
         return _internal(argv[0], argv[1:])
     p = argparse.ArgumentParser(prog="rec2md remote", description="--remote로 맡긴 원격 전사 job 관리")

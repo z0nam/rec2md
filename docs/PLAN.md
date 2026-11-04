@@ -37,7 +37,7 @@ rec2md <audio> [--engine local|rtzr|clova]  # 기본 local [--call] [--speakers 
 
 - `--remote studio` (2026-11-04 동작, `src/rec2md/remote.py`): Windows에서 `scp`로 원본을 studio `~/.cache/rec2md/remote/<job>/in/`에 보내고, `nohup`으로 원격 rec2md를 띄운 뒤 짧은 ssh로 상태·로그를 확인하다가 `out/`을 회수하고 job을 지운다.
   - ssh가 끊겨도 원격 처리는 계속되고 `rec2md remote fetch <job>`으로 나중에 받는다. 원격 job끼리는 flock으로 한 번에 하나, 락 밖 rec2md는 경고만.
-  - 디스크: 올리기 전 여유 ≥ 크기×3 확인. 원본(in/)은 성공·실패 모두 끝나자마자 지우고, 실패 job은 로그·상태만 7일 보관.
+  - 디스크: 올리기 전 여유 ≥ 크기×3 확인. 원본(in/)은 성공·실패 모두 끝나자마자 지우고, 실패 job은 로그·상태만 7일 보관, 받지 않은 성공 결과는 fetch까지 보관.
   - `--series`·목소리 DB는 studio 것, `--context` 파일은 같이 올린다. `batch --remote`는 파일마다 job 하나(상태 파일은 로컬).
   - 함정(실측): namun-ji 기본 셸은 PowerShell 5.1이라 `&` 연결이 안 되고, ssh를 `-n` 없이 부르면 stdin을 기다리며 멈춘다. studio 비대화형 ssh의 PATH는 `/usr/bin:/bin:/usr/sbin:/sbin`뿐이라 rec2md는 `~/.local/bin/rec2md` 경로로 부르고, 원격 쪽에서 `/opt/homebrew/bin`(ffmpeg) 등을 PATH에 붙인다. 한글·공백 파일명은 scp 양방향 그대로 유지됨.
 - **방침: 로컬 우선, 클라우드는 기준점·보조** (2026-10-16 변경). 처음엔 클라우드 우선이었으나, studio가 로컬 엔진을 충분히 돌릴 수 있고 클라우드 무료 한도(RTZR 계정당 10시간)로는 188시간 백로그를 감당할 수 없어 뒤집음.

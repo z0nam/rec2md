@@ -165,7 +165,14 @@ def main(argv: list[str] | None = None) -> None:
     for src in args.inputs:
         if not src.is_file():
             raise SystemExit(f"파일 없음: {src}")
-        run_one(src, args)
+        if args.remote:
+            from .remote import RemoteError
+            try:
+                run_one(src, args)
+            except RemoteError as e:
+                raise SystemExit(str(e)) from None
+        else:
+            run_one(src, args)
 
 
 def build_parser(prog: str = "rec2md", inputs: bool = True) -> argparse.ArgumentParser:
