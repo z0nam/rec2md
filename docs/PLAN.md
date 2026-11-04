@@ -35,7 +35,11 @@ rec2md <audio> [--engine local|rtzr|clova]  # 기본 local [--call] [--speakers 
 | `rtzr` | 품질 기준점·보조 | 계정당 무료 10시간을 파일럿 비교에 사용. 이후 시간당 약 1,000원. `domain=CALL`(전화), 화자분리, 4h/2GB |
 | `clova` | 품질 기준점·보조 | CLOVA Speech 장문 API(클로바노트와 같은 계열 엔진, 클로바노트 앱 한도와는 별개). NCP 가입·결제 필요, 단가는 콘솔 확인 |
 
-- `--remote studio`: Windows에서 `scp`로 파일을 studio에 보내고, `ssh studio rec2md --engine local`을 실행한 뒤 결과 json을 회수한다.
+- `--remote studio` (2026-11-04 동작, `src/rec2md/remote.py`): Windows에서 `scp`로 원본을 studio `~/.cache/rec2md/remote/<job>/in/`에 보내고, `nohup`으로 원격 rec2md를 띄운 뒤 짧은 ssh로 상태·로그를 확인하다가 `out/`을 회수하고 job을 지운다.
+  - ssh가 끊겨도 원격 처리는 계속되고 `rec2md remote fetch <job>`으로 나중에 받는다. 원격 job끼리는 flock으로 한 번에 하나, 락 밖 rec2md는 경고만.
+  - 디스크: 올리기 전 여유 ≥ 크기×3 확인. 원본(in/)은 성공·실패 모두 끝나자마자 지우고, 실패 job은 로그·상태만 7일 보관.
+  - `--series`·목소리 DB는 studio 것, `--context` 파일은 같이 올린다. `batch --remote`는 파일마다 job 하나(상태 파일은 로컬).
+  - 함정(실측): namun-ji 기본 셸은 PowerShell 5.1이라 `&` 연결이 안 되고, ssh를 `-n` 없이 부르면 stdin을 기다리며 멈춘다. studio 비대화형 ssh의 PATH는 `/usr/bin:/bin:/usr/sbin:/sbin`뿐이라 rec2md는 `~/.local/bin/rec2md` 경로로 부르고, 원격 쪽에서 `/opt/homebrew/bin`(ffmpeg) 등을 PATH에 붙인다. 한글·공백 파일명은 scp 양방향 그대로 유지됨.
 - **방침: 로컬 우선, 클라우드는 기준점·보조** (2026-10-16 변경). 처음엔 클라우드 우선이었으나, studio가 로컬 엔진을 충분히 돌릴 수 있고 클라우드 무료 한도(RTZR 계정당 10시간)로는 188시간 백로그를 감당할 수 없어 뒤집음.
 - 클라우드는 (1) 파일럿에서 로컬 품질을 재는 기준점, (2) 로컬이 크게 밀리는 유형(전화·잡음 현장 등)에 한해 선택 사용.
 - 파일럿: 같은 녹취 2〜3건(회의 1, 전화 1)을 local과 rtzr(무료 한도 내), 가능하면 clova로 돌려 비교. 로컬 처리속도(실시간 대비 배수)도 실측.
@@ -124,7 +128,7 @@ rec2md <audio> [--engine local|rtzr|clova]  # 기본 local [--call] [--speakers 
 - (선택) RTZR 개발자 가입 — 무료 600분을 파일럿 기준점으로 사용
 - (선택) NCP CLOVA Speech 도메인 생성, 콘솔에서 단가·무료 크레딧 확인
 - Mac: `brew install ffmpeg`, `uv tool install` 후 mlx-whisper·pyannote 설치. Hugging Face 토큰과 pyannote 모델 약관 동의 필요.
-- Windows에서 Mac으로 SSH 키 접속 확인
+- ~~Windows에서 Mac으로 SSH 키 접속 확인~~ 완료(2026-11-04, namun-ji → studio 키 인증, Tailscale)
 
 ## 진행/완료 (2026-10-30 착수분)
 설계는 `docs/features-202610.md`, 분배는 `docs/workplan-202610.md`. 사용법은 `README.md`.
@@ -247,7 +251,7 @@ leave-one-out: 녹취 하나를 빼고 나머지의 정답 클러스터(30초 �
 1. 짧은 샘플(1~2분)로 엔진마다 `rec2md sample.m4a --engine X`를 실행해 segments.json 스키마가 맞고 화자 라벨이 붙는지 확인.
 2. 실제 회의 녹취(30~60분)와 전화 녹취 각 1건으로 엔진 3개를 비교한다. 비교 항목은 인명·전문용어 오인식, 화자 혼동, 처리시간, 비용이고, 표로 정리해서 local 기본 유지 여부와 클라우드를 쓸 유형을 정함.
 3. Claude Code에서 "이 녹취 풀어줘 <경로>"라고 하면 스킬이 트리거되어 녹취록.md와 요약까지 한 번에 나오는지 확인.
-4. Windows에서 `--remote studio` 왕복이 동작하는지 확인.
+4. Windows에서 `--remote studio` 왕복이 동작하는지 확인. studio → studio 자기 자신 왕복(합성 음성 16초, 단일·batch)은 확인(2026-11-04). namun-ji는 설치 후 확인.
 
 ### 회의 구간 추정 1차 (2026-10-30, `rec2md bounds`, `src/rec2md/bounds.py`)
 녹음기를 늦게 켜거나 안 꺼서 앞뒤에 붙은 잡담·통화를 `meta.meeting_bounds`에 후보로 남긴다. 신호는 종료·개회 표현, 발화 밀도 하락, 화자 구성 변화(한 화자 독차지, 말하는 사람 수 급감, 회의 화자 비중 하락), 긴 무음이다. 창 신호는 경계보다 늦게 잡히므로 종료 표현이 있으면 그 발화 끝으로 당기고, 최고점의 80% 이상인 후보 중 회의에 가장 가까운 시각을 고른다.

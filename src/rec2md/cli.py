@@ -33,6 +33,9 @@ def load_context(args):
 
 
 def run_one(src: Path, args) -> Path:
+    if getattr(args, "remote", None):
+        from .remote import run_remote
+        return run_remote(src, args)
     out_dir = Path(args.out) if args.out else src.parent
     out_dir.mkdir(parents=True, exist_ok=True)
     # with_suffix는 "meeting.v1"의 ".v1"을 확장자로 보고 갈아끼우므로 이름 뒤에 덧붙인다
@@ -142,7 +145,7 @@ def _voices(t: Transcript, seg_path: Path, embs: dict, seg_embs: list, turns: li
 
 
 # `rec2md <서브커맨드> ...`는 rec2md.cmd_<이름>.main(argv)로 넘긴다. 그 외 인자는 전사 대상 파일
-SUBCOMMANDS = {"voices", "render", "series", "bounds", "notes", "review", "batch", "index"}
+SUBCOMMANDS = {"voices", "render", "series", "bounds", "notes", "review", "batch", "index", "remote"}
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -187,6 +190,8 @@ def build_parser(prog: str = "rec2md", inputs: bool = True) -> argparse.Argument
                    help="이번 회의 자료 (md·txt·hwpx·docx·pdf) → 용어 후보. 여러 개면 반복")
     p.add_argument("--no-prompt", dest="prompt", action="store_false",
                    help="맥락을 Whisper initial_prompt로 넘기지 않음 (보정 후보 추출만)")
+    p.add_argument("--remote", metavar="HOST",
+                   help="ssh로 HOST(예: studio)에 전사를 맡기고 결과를 받아 옴. 양쪽에 rec2md 필요 (rec2md remote --help)")
     return p
 
 

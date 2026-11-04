@@ -44,6 +44,7 @@ uv tool install --editable '.[diarize,render,export,office]'
 | `rec2md render --kind transcript ...` | segments.json → 클로바노트식 녹취록 (txt·md·html) | 동작 |
 | `rec2md voices ...` | 목소리 등록, 새 녹취에 실명 자동 태깅 | 동작 |
 | `rec2md batch <폴더>` | 폴더 일괄 전사, `--dry-run`(길이·추정 말소리 길이·예상 시간), 중단 후 이어서 | 동작 |
+| `rec2md <파일> --remote studio` | Windows 등에서 ssh로 맥에 전사를 맡기고 결과를 받아 옴 (`batch`도 됨), `rec2md remote ...`로 job 관리 | 동작 |
 | `rec2md review <segments.json>` | 문장 클릭 재생 + 화자·문장 고치기, 복사, 요약·메모 (이 맥에서만 열리는 웹 화면) | 동작 |
 | `rec2md review --queue <cases.json>` | 사례를 하나씩 듣고 판정 → `answers.json` (평가 정답) | 동작 |
 
@@ -64,6 +65,23 @@ rec2md batch ~/녹음 --dry-run      # 파일별 길이·추정 말소리 길이
 rec2md batch ~/녹음                # 차례로 전사 → ~/녹음/_transcripts/, 중단 후 같은 명령으로 이어서
                                    # --no-trim·--trim-min-gap도 그대로 받는다(dry-run 추정에도 반영)
 ```
+
+### 다른 맥에 맡기기 (`--remote`)
+
+local 엔진(mlx)은 Apple Silicon 맥에서만 돈다. 녹음기가 꽂히는 Windows PC에서는 전사를 ssh로 맥에 맡긴다.
+
+```sh
+rec2md 회의.mp3 --remote studio --speakers 3   # 원본 전송 → studio에서 전사 → 결과를 원본 옆으로 받음
+rec2md batch E:\REC_DIR --remote studio        # 일괄도 같다. 상태 파일·dry-run은 이쪽(Windows)에서
+rec2md remote list                             # 원격 job 상태
+rec2md remote fetch <job>                      # 연결이 끊겨 중단됐으면 나중에 받기(원격 처리는 계속 돈다)
+```
+
+- 준비: 양쪽에 rec2md 설치(Windows는 기본 extra만, ffmpeg 필요), 이쪽에서 `ssh <host>`가 키로 바로 되어야 한다.
+- 전사 옵션은 그대로 넘어간다. `--series`·목소리 DB는 **맡긴 맥의 것**을 쓰고, `--context` 파일은 함께 올린다.
+- 맡긴 맥에는 `~/.cache/rec2md/remote/<job>/`가 생긴다. 원본은 처리가 끝나면 바로 지우고, 성공한 job은 결과를 받은 뒤 통째로 지운다. 실패한 job은 로그만 7일 남는다.
+- 올리기 전에 여유 공간이 파일 크기의 3배 이상인지 본다. 원격 job끼리는 하나씩 차례로 돌고, 따로 돌고 있는 rec2md가 있으면 경고한다.
+- 원격 실행 파일은 `~/.local/bin/rec2md`(비대화형 ssh PATH에 없어 경로로 부른다). 다르면 `REC2MD_REMOTE_BIN`(홈 기준 상대경로 가능).
 
 ### 맥락 보정 (회의 시리즈 용어집)
 
