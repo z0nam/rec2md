@@ -327,3 +327,19 @@ def test_speech_check_without_vad_keeps_plain_report(folder, monkeypatch, capsys
 def test_speech_check_off_by_default(folder, monkeypatch, capsys):
     monkeypatch.setattr(cmd_batch.speechcheck, "available", lambda: pytest.fail("기본은 VAD를 쓰지 않음"))
     cmd_batch.main([str(folder), "--dry-run"])
+
+
+def test_speech_check_failure_keeps_uncorrected_row(folder, vad, monkeypatch, capsys):
+    """표본을 못 읽은 파일은 "소음 위주?"가 아니라 보정 없이(VAD 열 '-') 남는다."""
+    real = cmd_batch.speechcheck.speech_ratio
+
+    def flaky(path, *a, **k):
+        if path.name == "b_call.M4A":
+            raise RuntimeError("말소리 확인에 쓸 표본을 하나도 읽지 못함")
+        return real(path, *a, **k)
+    monkeypatch.setattr(cmd_batch.speechcheck, "speech_ratio", flaky)
+    cmd_batch.main([str(folder), "--dry-run", "--speech-check"])
+    captured = capsys.readouterr()
+    call = next(line for line in captured.out.splitlines() if line.startswith("b_call.M4A"))
+    assert "소음 위주" not in call and call.split()[3] == "-"
+    assert "말소리 확인 실패: b_call.M4A" in captured.out + captured.err

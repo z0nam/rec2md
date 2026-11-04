@@ -54,8 +54,11 @@ def windows(keep: list[tuple[float, float]], n: int = WINDOWS, win: float = WIN)
 def _clip(path: Path, start: float, dur: float) -> np.ndarray:
     raw = subprocess.run([_require("ffmpeg"), "-nostdin", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{dur:.2f}",
                           "-i", str(path), "-map", "0:a:0", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"],
-                         capture_output=True).stdout
-    return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                         capture_output=True)
+    # 깨진 프레임 경고만 있고 소리는 나오는 MP3가 있어, 실패는 종료 코드와 빈 출력이 함께일 때만 본다
+    if raw.returncode != 0 and not raw.stdout:
+        raise RuntimeError(f"ffmpeg로 표본을 읽지 못함 ({start:.0f}초): {raw.stderr.decode(errors='replace').strip()}")
+    return np.frombuffer(raw.stdout, dtype=np.int16).astype(np.float32) / 32768.0
 
 
 def _load_vad():
@@ -107,4 +110,6 @@ def speech_ratio(path: Path, min_gap: float = trim.MIN_GAP, n: int = WINDOWS,
         ann = vad({"waveform": torch.from_numpy(a).unsqueeze(0), "sample_rate": SAMPLE_RATE})
         speech += ann.get_timeline().support().duration()
         total += len(a) / SAMPLE_RATE
-    return sum(b - a for a, b in keep), (min(1.0, speech / total) if total else 0.0)
+    if not total:  # 표본을 하나도 못 들었으면 0%가 아니라 추정 실패 → 보정 없이 둔다
+        raise RuntimeError("말소리 확인에 쓸 표본을 하나도 읽지 못함")
+    return sum(e - s for s, e in keep), min(1.0, speech / total)
