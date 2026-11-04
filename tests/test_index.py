@@ -269,3 +269,39 @@ def test_batch_reserves_renamed_output_stem(rec):
     newcomer.write_bytes(b"new")
     clash = cmd_batch._clashes([media / "REC00010.MP3", newcomer], state)
     assert newcomer in clash and media / "REC00010.MP3" not in clash
+
+
+def test_undo_last_of_two_renames_keeps_reservation(rec):
+    _, out = rec
+    ix.build(out)
+    _approve(out, "REC00010", date="2099-03-04", date_precision="day", date_confidence="high", topic="첫이름")
+    idx = ix.load_index(out)
+    ix.apply_renames(out, idx, ix.plan_renames(out, idx))
+    _approve(out, "REC00010.MP3", date="2099-03-04", date_precision="day", date_confidence="high", topic="둘째이름")
+    idx = ix.load_index(out)
+    ix.apply_renames(out, idx, ix.plan_renames(out, idx))
+    ix.undo_renames(out, ix.load_index(out), 1)
+    state = json.loads((out / ".rec2md-state.json").read_text(encoding="utf-8"))
+    assert state["REC00010.MP3"]["outputs"] == "20990304_첫이름-REC00010"
+    ix.undo_renames(out, ix.load_index(out), 1)
+    state = json.loads((out / ".rec2md-state.json").read_text(encoding="utf-8"))
+    assert "outputs" not in state["REC00010.MP3"]
+
+
+def test_duplicate_outputs_use_newest_and_block_rename(rec):
+    import os
+    _, out = rec
+    ix.build(out)
+    _approve(out, "REC00010", date="2099-03-04", date_precision="day", date_confidence="high", topic="가상")
+    idx = ix.load_index(out)
+    ix.apply_renames(out, idx, ix.plan_renames(out, idx))
+    # 바뀐 원본을 다시 전사하면 원래 이름으로 새 출력이 생긴다
+    write_seg(out, "REC00010", "REC00010.MP3", duration=999.0)
+    old = out / "20990304_가상-REC00010.segments.json"
+    os.utime(old, (1, 1))
+    item = ix.find_item(ix.build(out), "REC00010.MP3")
+    assert item["duration"] == 999.0 and item["stem"] == "REC00010"
+    assert set(item["conflict"]) == {"REC00010", "20990304_가상-REC00010"}
+    item["approved"] = True
+    plans = ix.plan_renames(out, {"items": [item]})
+    assert "여럿" in plans[0]["skip"]

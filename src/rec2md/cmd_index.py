@@ -39,7 +39,7 @@ def cmd_build(argv: list[str]) -> None:
     md = ix.write_md(out, idx)
     items = idx["items"]
     todo = sum(1 for i in items if not (i.get("agent") or {}).get("topic"))
-    flags = {f: sum(1 for i in items if i.get(f)) for f in ("stale", "missing", "rec_dup")}
+    flags = {f: sum(1 for i in items if i.get(f)) for f in ("stale", "conflict", "missing", "rec_dup")}
     print(f"색인 {len(items)}건 (에이전트 판단 필요 {todo}건) → {out / ix.INDEX_JSON}, {md}")
     for f, n in flags.items():
         if n:

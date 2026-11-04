@@ -224,17 +224,24 @@ def build(out: Path, media_dirs: list[Path] = ()) -> dict:
     state_p = out / STATE_FILE
     state = json.loads(state_p.read_text(encoding="utf-8")) if state_p.is_file() else {}
 
-    items, seen = [], set()
+    # 같은 원본을 가리키는 segments.json이 둘 이상일 수 있다(이름을 바꾼 뒤 다시 전사하면 원래 이름으로 새로 생김).
+    # 어느 쪽이 맞는지 이름 순서로 고르지 않는다: 가장 최근에 쓴 것을 기계적 칸에 쓰고, 항목을 conflict로 막아 사람이 정리하게 한다
+    groups: dict[str, list[tuple[Path, Transcript]]] = {}
     for seg in sorted(out.glob(f"*{SEG_SUFFIX}")):
         try:
             t = Transcript.from_json(seg)
         except (OSError, ValueError, TypeError, KeyError) as e:
             print(f"건너뜀(읽기 실패): {seg.name} — {type(e).__name__}")
             continue
-        source = t.source or f"{stem_of(seg)}"
-        if source in seen:  # 같은 원본을 가리키는 출력이 둘(이름을 손으로 바꾼 사본 등)
-            print(f"건너뜀(원본 중복): {seg.name} → {source}")
-            continue
+        groups.setdefault(t.source or stem_of(seg), []).append((seg, t))
+
+    items, seen = [], set()
+    for source, group in groups.items():
+        group.sort(key=lambda g: g[0].stat().st_mtime, reverse=True)
+        seg, t = group[0]
+        conflict = [stem_of(g[0]) for g in group] if len(group) > 1 else None
+        if conflict:
+            print(f"출력 중복(정리 필요): {source} → {', '.join(conflict)} — 최신 {stem_of(seg)} 기준으로 색인")
         seen.add(source)
         prev = by_source.get(source, {})
         mp = media_path(source, state, list(media_dirs))
@@ -254,6 +261,8 @@ def build(out: Path, media_dirs: list[Path] = ()) -> dict:
             "approved": bool(prev.get("approved")),
             "stale": stale,
         }
+        if conflict:
+            item["conflict"] = conflict
         for k in ("renamed_from",):
             if prev.get(k):
                 item[k] = prev[k]
@@ -370,7 +379,7 @@ def render_md(idx: dict) -> str:
         b = i.get("bounds") or {}
         bounds = f"{_ts(b.get('start'))}〜{_ts(b.get('end'))} ({b.get('confidence')})" if b else "-"
         date = f"{a['date']} ({a.get('date_precision') or '-'}·{a.get('date_confidence') or '-'})" if a.get("date") else "-"
-        flags = "".join(f" [{f}]" for f in ("stale", "missing", "rec_dup") if i.get(f))
+        flags = "".join(f" [{f}]" for f in ("stale", "conflict", "missing", "rec_dup") if i.get(f))
         ev = a.get("date_evidence")
         ev = "; ".join(ev) if isinstance(ev, list) else ev
         name = proposed(i) if (a.get("topic") or a.get("date")) else "-"
@@ -424,6 +433,8 @@ def plan_renames(out: Path, idx: dict) -> list[dict]:
             p["skip"] = "이미 그 이름"
         elif new.casefold() in taken:
             p["skip"] = f"같은 이름 제안이 겹침({taken[new.casefold()]})"
+        elif i.get("conflict"):
+            p["skip"] = f"같은 원본의 출력이 여럿({', '.join(i['conflict'])}) — 하나만 남기고 다시 색인"
         elif i.get("stale"):
             p["skip"] = "원본 지문이 바뀜(stale) — 다시 확인 후 `index set <폴더> <stem> --revalidate`, 그다음 승인"
         if p["skip"] is None:
@@ -532,7 +543,13 @@ def undo_renames(out: Path, idx: dict, n: int | None = None) -> list[dict]:
         state_p = out / STATE_FILE
         if state_p.is_file():
             state = json.loads(state_p.read_text(encoding="utf-8"))
-            if isinstance(state.get(e["source"]), dict) and state[e["source"]].pop("outputs", None):
+            rec = state.get(e["source"])
+            if isinstance(rec, dict):
+                # 원래 이름으로 돌아갔을 때만 예약을 지우고, 앞선 이름 바꾸기의 이름으로 돌아가면 그 이름을 예약한다
+                if e["old"] == Path(e["source"]).stem:
+                    rec.pop("outputs", None)
+                else:
+                    rec["outputs"] = e["old"]
                 save_json(state_p, state)
     save_json(log_p, log)
     if undone:
