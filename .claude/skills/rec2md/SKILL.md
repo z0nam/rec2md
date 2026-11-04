@@ -16,7 +16,7 @@ rec2md <파일...> [--speakers N] [--no-diarize] [--no-voices] [--out <폴더>] 
 - 목소리 DB에 등록된 사람이 있으면 화자 라벨에 실명이 자동으로 붙는다: `홍길동(화자3)`, 불확실하면 `홍길동?(화자3)`. 처리는 5단계.
 - 로컬 처리(Apple Silicon, mlx-whisper + pyannote). 외부 전송 없음. 대략 실시간의 수 배 속도라 1시간 녹음이면 수 분〜십여 분 걸린다 → 긴 파일은 백그라운드로 돌린다.
 - 화자 수를 알면 `--speakers N`(전화 통화는 보통 2). 화자분리 설정(HF_TOKEN)이 없으면 오류 메시지대로 하거나 `--no-diarize`.
-- 이 머신이 Apple Silicon이 아니면 local 엔진이 동작하지 않는다(원격·클라우드 엔진은 개발 중).
+- 이 머신이 Apple Silicon이 아니면(예: Windows) local 엔진이 돌지 않는다. `--remote studio`를 붙이면 ssh로 studio(맥)에 전사를 맡기고 결과를 원본 옆으로 받아 온다(`batch`도 같다). 연결이 끊겨 멈췄으면 출력의 job id로 `rec2md remote fetch <job>`. 클라우드 엔진은 개발 중.
 
 ## 2. 정리 (에이전트)
 
