@@ -11,10 +11,29 @@ SAMPLE_RATE = 16000
 
 
 def _require(tool: str) -> str:
-    path = shutil.which(tool)
+    path = shutil.which(tool) or _link_target(tool)
     if not path:
         raise SystemExit(f"{tool}가 PATH에 없음 (macOS: brew install ffmpeg / Windows: winget install Gyan.FFmpeg)")
     return path
+
+
+def _link_target(tool: str) -> str | None:
+    """PATH의 심링크를 직접 따라간다.
+
+    winget은 `WinGet\\Links\\ffprobe.exe`를 심링크로 두는데, ssh로 들어온 세션의 프로세스는 이를 따라가지
+    못해(WinError 448, 신뢰할 수 없는 탑재 지점) shutil.which가 None을 준다(namun-ji 실측 2026-11-04).
+    """
+    import os
+    names = [tool] + ([tool + ".exe"] if os.name == "nt" and not tool.lower().endswith(".exe") else [])
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        for n in names:
+            p = os.path.join(d, n)
+            if os.path.islink(p):
+                t = os.readlink(p).removeprefix("\\\\?\\")
+                t = t if os.path.isabs(t) else os.path.join(d, t)
+                if os.path.isfile(t):
+                    return t
+    return None
 
 
 def probe_duration(path: Path) -> float:
