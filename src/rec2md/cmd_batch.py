@@ -227,6 +227,8 @@ def main(argv: list[str]) -> None:
 
     clashed = [i.path.name for i in items if i.plan == CLASH]
     cli.log(f"끝: 처리 {len(todo) - failed}개, 실패 {failed}개, 이름 겹침 {len(clashed)}개 → {out}")
+    if todo:
+        cli.log(f"색인(날짜·주제·제안 이름 표): rec2md index {out}")
     if failed:
         raise SystemExit(f"실패 {failed}개 — 같은 명령을 다시 실행하면 실패한 것만 다시 시도함 ({state_path})")
     if clashed:
