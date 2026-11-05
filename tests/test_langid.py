@@ -184,3 +184,92 @@ def test_dry_run_detects_with_selected_model(tmp_path, monkeypatch):
     monkeypatch.setattr(cmd_batch, "check_language", lambda items, gap, trimmed=True, model=None: seen.update(model=model))
     cmd_batch.main([str(d), "--dry-run", "--language", "auto", "--model", "my/whisper"])
     assert seen == {"model": "my/whisper"}
+# ---- 구간별 언어 (--mixed-language per-region) ----
+
+def test_region_picker_switches_only_when_sure_and_among_candidates():
+    probs = iter([{"ko": 0.9, "en": 0.1}, {"en": 0.95, "ko": 0.05}, {"en": 0.7, "ko": 0.3},
+                  {"ja": 0.9, "en": 0.05, "ko": 0.05}])
+    p = langid.RegionPicker(lambda clip: next(probs), ["ko", "en"])
+    clip = np.zeros(SR, np.float32)
+    got = [p(clip, 0, 10), p(clip, 10, 20), p(clip, 20, 30), p(clip, 30, 40)]
+    # 확신이 낮은 en(0.7)과 후보 밖 언어(ja)는 ko로 둔다
+    assert got == ["ko", "en", "ko", "ko"]
+    assert p.runs == [[0, 10, "ko"], [10, 20, "en"], [20, 40, "ko"]]
+    assert p.meta()["sec"] == {"ko": 30, "en": 10}
+
+
+def test_region_picker_short_chunk_follows_previous():
+    probs = iter([{"en": 0.99}])
+    p = langid.RegionPicker(lambda clip: next(probs), ["ko", "en"])
+    clip = np.zeros(SR, np.float32)
+    assert [p(clip, 0, 10), p(clip, 10, 11.5)] == ["en", "en"]   # 1.5초 "Thank you"는 앞 청크를 따른다
+    assert p.runs == [[0, 11.5, "en"]]
+
+
+def test_candidates_come_from_sure_windows():
+    det = {"windows": [W("ko", 0.94), W("en", 1.0), W("ja", 0.3), W("silent", 0.0)]}
+    assert langid.candidates_of(det) == ["ko", "en"]
+
+
+@pytest.fixture
+def mixed_run(fake_run, monkeypatch):
+    """화자분리를 가짜로 바꿔 청크 3개(0-20, 30-55, 70-95초)를 만든다. 창 판정은 ko, en, ko(섞임)."""
+    from rec2md import diarize
+    turns = [(0.0, 20.0, "A"), (30.0, 55.0, "B"), (70.0, 95.0, "A")]
+    monkeypatch.setattr(diarize, "diarize_with_embeddings", lambda wav, n=None: (turns, {}, []))
+    monkeypatch.setattr(diarize, "speech_regions", lambda t: [(s, e) for s, e, _ in t])
+    src, calls = fake_run
+    calls["seq"] = ["ko", "en", "ko"]
+    chunk_probs = iter([{"ko": 0.9}, {"en": 0.97, "ko": 0.03}, {"ko": 0.8}])
+
+    class Engine:
+        name, model = "fake", "m"
+
+        def detect_language(self, clip):
+            lang = calls["seq"][calls["detect"] % 3]
+            calls["detect"] += 1
+            return {lang: 0.95}, {"ko": "오늘 회의는 여기까지 하겠습니다", "en": "That is all for today thank you"}[lang]
+
+        def language_probs(self, clip):
+            return next(chunk_probs)
+
+        def transcribe(self, wav, language, regions=None):
+            for s, e in regions:
+                calls["langs"].append(language(np.zeros(int((e - s) * SR), np.float32), s, e)
+                                      if callable(language) else language)
+            return [Segment(0.0, 2.0, "hello")]
+
+    monkeypatch.setattr(cli, "get_engine", lambda *a, **k: Engine())
+    return src, calls
+
+
+def test_per_region_transcribes_each_chunk_in_its_language(mixed_run):
+    src, calls = mixed_run
+    args = cli.build_parser().parse_args([str(src), "--no-trim", "--no-voices", "--language", "auto",
+                                          "--mixed-language", "per-region"])
+    cli.run_one(src, args)
+    out = json.loads(src.with_name("talk.segments.json").read_text(encoding="utf-8"))
+    assert calls["langs"] == ["ko", "en", "ko"]
+    reg = out["meta"]["language_detect"]["regions"]
+    assert reg["runs"] == [[0.0, 20.0, "ko"], [30.0, 55.0, "en"], [70.0, 95.0, "ko"]]
+    assert reg["sec"] == {"ko": 45.0, "en": 25.0}
+    assert out["language"] == "ko"
+
+
+def test_mixed_without_per_region_stays_korean(mixed_run):
+    src, calls = mixed_run
+    args = cli.build_parser().parse_args([str(src), "--no-trim", "--no-voices", "--language", "auto"])
+    cli.run_one(src, args)
+    out = json.loads(src.with_name("talk.segments.json").read_text(encoding="utf-8"))
+    assert calls["langs"] == ["ko", "ko", "ko"]
+    assert "regions" not in out["meta"]["language_detect"]
+
+
+def test_split_long_cuts_at_quiet_point():
+    a = tone(70)
+    a[int(22.0 * SR):int(22.3 * SR)] = 0.0   # 22초 근처의 쉼
+    a[int(41.0 * SR):int(41.3 * SR)] = 0.0
+    out = langid.split_long([(0.0, 70.0), (80.0, 90.0)], np.concatenate([a, tone(20)]))
+    assert [round(s, 1) for s, _ in out[:3]] == [0.0, 22.1, 41.1]
+    assert all(e - s <= 25.0 for s, e in out)
+    assert out[-1] == (80.0, 90.0) and out[-2][1] == 70.0

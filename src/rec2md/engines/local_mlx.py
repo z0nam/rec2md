@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ..audio import SAMPLE_RATE, load_wav
 from ..segments import Segment, Word
-from .base import Engine, Region
+from .base import Engine, Language, Region
 
 DEFAULT_MODEL = "mlx-community/whisper-large-v3-turbo"
 PAD = 0.2  # 구간 앞뒤로 붙이는 여유(초). 첫 음절이 잘리지 않게
@@ -70,15 +70,15 @@ class LocalMLX(Engine):
             segs.append(Segment(start=s["start"] + offset, end=s["end"] + offset, text=s["text"].strip(), words=words))
         return segs
 
-    def transcribe(self, wav: Path, language: str, regions: list[Region] | None = None) -> list[Segment]:
+    def transcribe(self, wav: Path, language: Language, regions: list[Region] | None = None) -> list[Segment]:
         _require_mlx()
         with _cache_limit(CACHE_LIMIT):
             return self._transcribe(wav, language, regions)
 
-    def detect_language(self, clip) -> tuple[dict[str, float], str]:
+    def language_probs(self, clip) -> dict[str, float]:
+        """창(30초 이하)의 언어별 확률. 인코더 한 번만 돌린다."""
         _require_mlx()
         import mlx.core as mx
-        import mlx_whisper
         from mlx_whisper.audio import N_FRAMES, N_SAMPLES, log_mel_spectrogram, pad_or_trim
         from mlx_whisper.transcribe import ModelHolder
 
@@ -87,12 +87,22 @@ class LocalMLX(Engine):
             model = ModelHolder.get_model(self.model, mx.float16)
             mel = log_mel_spectrogram(clip, n_mels=model.dims.n_mels, padding=N_SAMPLES)
             _, probs = model.detect_language(pad_or_trim(mel, N_FRAMES, axis=-2).astype(mx.float16))
+        return {k: float(v) for k, v in probs.items()}
+
+    def detect_language(self, clip) -> tuple[dict[str, float], str]:
+        import mlx_whisper
+
+        probs = self.language_probs(clip)
+        with _cache_limit(CACHE_LIMIT):
             text = mlx_whisper.transcribe(clip, path_or_hf_repo=self.model, language=None,
                                           condition_on_previous_text=False, verbose=None)["text"]
-        return {k: float(v) for k, v in probs.items()}, text
+        return probs, text
 
-    def _transcribe(self, wav: Path, language: str, regions: list[Region] | None) -> list[Segment]:
+    def _transcribe(self, wav: Path, language: Language, regions: list[Region] | None) -> list[Segment]:
         if not regions:
+            if callable(language):  # 구간이 없으면 파일 전체를 한 덩어리로 본다
+                audio = load_wav(wav)
+                return self._decode(audio, language(audio, 0.0, len(audio) / SAMPLE_RATE), 0.0)
             return self._decode(str(wav), language, 0.0)
 
         # 말소리 구간만 잘라 따로 전사한다. 통째로 넣으면 다화자·원거리 녹음에서
@@ -107,5 +117,5 @@ class LocalMLX(Engine):
             clip = audio[int(a * SAMPLE_RATE):int(b * SAMPLE_RATE)]
             if len(clip) < SAMPLE_RATE // 2:
                 continue
-            segs += self._decode(clip, language, a)
+            segs += self._decode(clip, language(clip, a, b) if callable(language) else language, a)
         return segs
