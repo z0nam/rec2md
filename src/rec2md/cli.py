@@ -69,16 +69,25 @@ def run_one(src: Path, args) -> Path:
             regions = None if args.no_vad else speech_regions(turns)
 
         engine = get_engine(args.engine, model=args.model, prompt=prompt)
-        language = args.language
+        language, picker = args.language, None
         if language == AUTO:
             language = _detect_language(engine, wav, turns, meta)
+            picker = _region_picker(engine, meta["language_detect"], regions, args)
+            if picker is not None:
+                from .langid import split_long
+                n = len(regions)
+                regions = split_long(regions, audio.load_wav(wav))
+                meta["language_detect"]["split_chunks"] = len(regions) - n
         t0 = time.monotonic()
-        segs = engine.transcribe(wav, language, regions)
+        segs = engine.transcribe(wav, picker or language, regions)
         segs = drop_known_hallucinations(collapse_ngram_loops(collapse_repeats(segs)), prompt)
         meta["asr_sec"] = round(time.monotonic() - t0, 1)
         meta["vad"] = regions is not None
         heard = meta["trim"]["kept_sec"] if "trim" in meta else duration  # 잘라냈으면 실제로 들은 길이로
         log(f"전사 {meta['asr_sec']}s (실시간 대비 {heard / max(meta['asr_sec'], 0.1):.1f}배)")
+        if picker is not None:
+            meta["language_detect"]["regions"] = picker.meta()
+            log("구간별 언어: " + ", ".join(f"{k} {fmt_ts(v)}" for k, v in picker.meta()["sec"].items()))
 
         rename: dict[str, str] = {}
         if turns is not None:
@@ -88,6 +97,9 @@ def run_one(src: Path, args) -> Path:
             remap_segments(segs, offsets)
             if turns is not None:
                 turns, seg_embs = remap_spans(turns, offsets), remap_spans(seg_embs, offsets)
+            if picker is not None:
+                runs = meta["language_detect"]["regions"]["runs"]
+                runs[:] = [[round(a, 1), round(b, 1), x] for a, b, x in remap_spans(runs, offsets)]
 
     t = Transcript(source=src.name, duration=duration, engine=f"{engine.name}:{getattr(engine, 'model', '')}",
                    language=language, segments=segs, meta=meta)
@@ -120,6 +132,21 @@ def _detect_language(engine, wav: Path, turns, meta: dict) -> str:
     meta["language_detect"] = det
     log(f"언어 판별 {langid.summary(det)} · 전사 언어 {det['language']}")
     return det["language"]
+
+
+def _region_picker(engine, det: dict, regions, args):
+    """`--mixed-language per-region`이고 녹음이 섞였으면 청크마다 언어를 고르는 함수, 아니면 None."""
+    if getattr(args, "mixed_language", "ko") != "per-region" or det["verdict"] != "mixed":
+        return None
+    from . import langid
+    cands = langid.candidates_of(det)
+    if len(cands) < 2:
+        return None
+    if not regions:
+        log("구간별 언어는 화자분리 청크가 있어야 함(--no-diarize·--no-vad면 쓸 수 없음) — ko로 전사")
+        return None
+    log(f"섞인 녹음: 청크마다 {'·'.join(cands)} 중에서 언어를 골라 전사")
+    return langid.RegionPicker(engine.language_probs, cands)
 
 
 def trim_min_gap(args) -> float:
@@ -203,6 +230,9 @@ def build_parser(prog: str = "rec2md", inputs: bool = True) -> argparse.Argument
     p.add_argument("--model", help="엔진별 모델 (local 기본: whisper-large-v3-turbo)")
     p.add_argument("--language", default="ko",
                    help=f"전사 언어 (기본 ko). {AUTO}면 말소리 처음·중간·끝 30초로 판별하고, 섞였거나 판단할 수 없으면 ko")
+    p.add_argument("--mixed-language", choices=["ko", "per-region"], default="ko",
+                   help="--language auto에서 언어가 섞인 녹음의 처리: ko(기본, 전부 ko) 또는 "
+                        "per-region(화자분리 청크마다 판별한 언어로 전사)")
     p.add_argument("--speakers", type=int, help="화자 수를 알면 지정 (정확도 향상)")
     p.add_argument("--no-diarize", action="store_true", help="화자분리 생략 (말소리 구간 청킹도 같이 꺼짐)")
     p.add_argument("--no-vad", action="store_true", help="말소리 구간 청킹 없이 파일 전체를 한 번에 전사")

@@ -117,3 +117,77 @@ def summary(det: dict) -> str:
     wins = ", ".join(f"{w['lang']} {w['prob']:.2f}" if w["lang"] != "silent" else "무음" for w in det["windows"])
     head = det["verdict"] if det["verdict"] == det["language"] else f"{det['verdict']}→{det['language']}"
     return f"{head} ({wins})" if wins else head
+
+
+# ---- 구간별 언어 (`--mixed-language per-region`) ----
+
+REGION_SURE = 0.8   # 청크가 FALLBACK이 아닌 언어로 바뀌려면 그 언어 확률이 이 이상이어야 한다
+RUN_GAP = 5.0       # 같은 언어 청크 사이 공백이 이 이하면 구간 하나로 합친다
+REGION_MIN_SEC = 3.0  # 이보다 짧은 청크는 판별이 불안정해 바로 앞 청크의 언어를 따른다
+
+
+class RegionPicker:
+    """청크마다 언어를 고른다. 후보는 녹음 판별에서 확실하게 나온 언어로 좁힌다(잡음 청크가 엉뚱한 언어로 가지 않게).
+
+    engine.transcribe(language=picker)로 넘기면 청크마다 picker(clip, start, end)가 불린다.
+    고른 결과는 runs에 [시작, 끝, 언어]로 쌓인다(이어진 같은 언어는 합침).
+    """
+
+    def __init__(self, probs_fn: Callable[[np.ndarray], dict[str, float]], candidates: Sequence[str],
+                 fallback: str = FALLBACK, sure: float = REGION_SURE, min_sec: float = REGION_MIN_SEC):
+        self.probs_fn, self.fallback, self.sure, self.min_sec = probs_fn, fallback, sure, min_sec
+        self.candidates = list(dict.fromkeys([fallback, *candidates]))
+        self.runs: list[list] = []
+        self.sec: dict[str, float] = {}
+        self._prev = fallback
+
+    def pick(self, clip: np.ndarray, start: float, end: float) -> str:
+        if end - start < self.min_sec:
+            lang = self._prev
+        else:
+            probs = self.probs_fn(clip.astype(np.float32))
+            best = max(self.candidates, key=lambda c: probs.get(c, 0.0))
+            lang = best if best == self.fallback or probs.get(best, 0.0) >= self.sure else self.fallback
+        self._prev = lang
+        self.sec[lang] = self.sec.get(lang, 0.0) + end - start   # 실제로 전사한 길이만 센다
+        # 같은 언어라도 RUN_GAP보다 긴 말소리 공백을 사이에 두면 따로 둔다(전사하지 않은 구간을 덮지 않게)
+        if self.runs and self.runs[-1][2] == lang and start - self.runs[-1][1] <= RUN_GAP:
+            self.runs[-1][1] = round(end, 1)
+        else:
+            self.runs.append([round(start, 1), round(end, 1), lang])
+        return lang
+
+    __call__ = pick
+
+    def meta(self) -> dict:
+        """meta["language_detect"]["regions"]: 언어별 초와 이어진 구간 목록(시각은 전사한 오디오 기준)."""
+        return {"sec": {k: round(v, 1) for k, v in self.sec.items()}, "runs": self.runs}
+
+
+def candidates_of(det: dict) -> list[str]:
+    """녹음 판별의 창 중 확실한 것(WEAK 이상)에서 나온 언어들."""
+    return list(dict.fromkeys(w["lang"] for w in det["windows"]
+                              if w["lang"] not in ("silent", "?") and w["prob"] >= WEAK))
+
+
+def split_long(regions: Sequence[Span], audio: np.ndarray, max_len: float = 25.0, search: float = 8.0,
+               frame: float = 0.1) -> list[Span]:
+    """max_len보다 긴 청크를 [max_len - search, max_len] 안에서 가장 조용한 0.1초 지점에서 나눈다.
+
+    화자분리는 한 사람이 쉬지 않고 이어 말한 구간을 청크 하나로 남긴다(발표 등, 몇 분짜리도 있음). 청크 언어는 청크
+    첫 30초로 정해지므로, 구간별 언어를 쓸 때만 긴 청크를 나눠 중간에 바뀐 언어를 놓치지 않게 한다."""
+    n = int(frame * SAMPLE_RATE)
+    out: list[Span] = []
+    for s, e in regions:
+        while e - s > max_len:
+            lo, hi = int((s + max_len - search) * SAMPLE_RATE), int((s + max_len) * SAMPLE_RATE)
+            seg = audio[lo:hi]
+            k = len(seg) // n
+            if k == 0:
+                break
+            rms = np.sqrt((seg[:k * n].reshape(k, n) ** 2).mean(axis=1))
+            cut = (lo + int(np.argmin(rms)) * n + n // 2) / SAMPLE_RATE
+            out.append((s, cut))
+            s = cut
+        out.append((s, e))
+    return out
