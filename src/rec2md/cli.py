@@ -18,6 +18,7 @@ from .segments import Transcript
 from .series import build_prompt
 
 ENV_FILE = Path.home() / ".config" / "rec2md" / ".env"
+AUTO = "auto"  # --language auto: 녹음마다 언어를 판별한다(langid.py)
 
 
 def log(msg: str) -> None:
@@ -67,9 +68,12 @@ def run_one(src: Path, args) -> Path:
             # 화자분리가 찾은 말소리 구간만 전사한다(VAD 겸용)
             regions = None if args.no_vad else speech_regions(turns)
 
-        t0 = time.monotonic()
         engine = get_engine(args.engine, model=args.model, prompt=prompt)
-        segs = engine.transcribe(wav, args.language, regions)
+        language = args.language
+        if language == AUTO:
+            language = _detect_language(engine, wav, turns, meta)
+        t0 = time.monotonic()
+        segs = engine.transcribe(wav, language, regions)
         segs = drop_known_hallucinations(collapse_ngram_loops(collapse_repeats(segs)), prompt)
         meta["asr_sec"] = round(time.monotonic() - t0, 1)
         meta["vad"] = regions is not None
@@ -86,7 +90,7 @@ def run_one(src: Path, args) -> Path:
                 turns, seg_embs = remap_spans(turns, offsets), remap_spans(seg_embs, offsets)
 
     t = Transcript(source=src.name, duration=duration, engine=f"{engine.name}:{getattr(engine, 'model', '')}",
-                   language=args.language, segments=segs, meta=meta)
+                   language=language, segments=segs, meta=meta)
     from .bounds import estimate, summary
     meta["meeting_bounds"] = estimate(t)
     if meta["meeting_bounds"]["confidence"] != "none":
@@ -101,6 +105,21 @@ def run_one(src: Path, args) -> Path:
         log(f"보정 후보 {n}건")
     log(f"→ {raw_path}")
     return raw_path
+
+
+def _detect_language(engine, wav: Path, turns, meta: dict) -> str:
+    """말소리 구간에서 언어를 판별해 meta["language_detect"]에 남기고 전사에 쓸 언어를 돌려준다."""
+    from . import langid
+    regions = None
+    if turns:
+        from .diarize import speech_regions
+        regions = speech_regions(turns)
+    t0 = time.monotonic()
+    det = langid.detect(audio.load_wav(wav), regions, engine.detect_language)
+    det["sec"] = round(time.monotonic() - t0, 1)
+    meta["language_detect"] = det
+    log(f"언어 판별 {langid.summary(det)} · 전사 언어 {det['language']}")
+    return det["language"]
 
 
 def trim_min_gap(args) -> float:
@@ -182,7 +201,8 @@ def build_parser(prog: str = "rec2md", inputs: bool = True) -> argparse.Argument
         p.add_argument("inputs", nargs="+", type=Path, help="오디오/영상 파일 (mp3, m4a, wav, mp4, mov …)")
     p.add_argument("--engine", default="local", choices=["local"])
     p.add_argument("--model", help="엔진별 모델 (local 기본: whisper-large-v3-turbo)")
-    p.add_argument("--language", default="ko")
+    p.add_argument("--language", default="ko",
+                   help=f"전사 언어 (기본 ko). {AUTO}면 말소리 처음·중간·끝 30초로 판별하고, 섞였거나 판단할 수 없으면 ko")
     p.add_argument("--speakers", type=int, help="화자 수를 알면 지정 (정확도 향상)")
     p.add_argument("--no-diarize", action="store_true", help="화자분리 생략 (말소리 구간 청킹도 같이 꺼짐)")
     p.add_argument("--no-vad", action="store_true", help="말소리 구간 청킹 없이 파일 전체를 한 번에 전사")

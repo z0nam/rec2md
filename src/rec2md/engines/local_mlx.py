@@ -30,6 +30,13 @@ def _cache_limit(limit: int):
         mx.clear_cache()
 
 
+def _require_mlx() -> None:
+    try:
+        import mlx_whisper  # noqa: F401
+    except ImportError as e:
+        raise SystemExit("local 엔진은 Apple Silicon Mac + mlx-whisper가 필요함. Windows는 --remote studio 사용") from e
+
+
 class LocalMLX(Engine):
     name = "local"
 
@@ -64,13 +71,25 @@ class LocalMLX(Engine):
         return segs
 
     def transcribe(self, wav: Path, language: str, regions: list[Region] | None = None) -> list[Segment]:
-        try:
-            import mlx_whisper  # noqa: F401
-        except ImportError as e:
-            raise SystemExit("local 엔진은 Apple Silicon Mac + mlx-whisper가 필요함. Windows는 --remote studio 사용") from e
-
+        _require_mlx()
         with _cache_limit(CACHE_LIMIT):
             return self._transcribe(wav, language, regions)
+
+    def detect_language(self, clip) -> tuple[dict[str, float], str]:
+        _require_mlx()
+        import mlx.core as mx
+        import mlx_whisper
+        from mlx_whisper.audio import N_FRAMES, N_SAMPLES, log_mel_spectrogram, pad_or_trim
+        from mlx_whisper.transcribe import ModelHolder
+
+        with _cache_limit(CACHE_LIMIT):
+            # transcribe()와 같은 방식으로 첫 30초 창의 언어 확률을 낸다(모델은 ModelHolder가 한 번만 올린다)
+            model = ModelHolder.get_model(self.model, mx.float16)
+            mel = log_mel_spectrogram(clip, n_mels=model.dims.n_mels, padding=N_SAMPLES)
+            _, probs = model.detect_language(pad_or_trim(mel, N_FRAMES, axis=-2).astype(mx.float16))
+            text = mlx_whisper.transcribe(clip, path_or_hf_repo=self.model, language=None,
+                                          condition_on_previous_text=False, verbose=None)["text"]
+        return {k: float(v) for k, v in probs.items()}, text
 
     def _transcribe(self, wav: Path, language: str, regions: list[Region] | None) -> list[Segment]:
         if not regions:
