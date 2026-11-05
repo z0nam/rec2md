@@ -14,6 +14,8 @@
   잘라낸 뒤에도 6시간이 넘는 파일은 건너뛴다(청크 분할은 아직 없음 — docs/PLAN.md 위시리스트).
 - `--speech-check`: 소리 크기 추정은 지속 소음도 말소리로 센다. 남긴 구간에서 표본 창만 CPU VAD로 들어 말소리 길이를
   다시 추정하고, 말소리가 드문 파일은 "소음 위주?"로 표시한다(`speechcheck`). 판정·처리 대상은 바꾸지 않는다.
+- `--language auto`: 파일마다 언어를 판별해 전사한다(`langid`, 섞였거나 판단할 수 없으면 ko). `--dry-run`과 함께 주면
+  남긴 구간의 처음·중간·끝 30초로 미리 판별해 "언어" 열에 보여 준다(mlx-whisper 필요, 파일당 몇 초).
 """
 
 from __future__ import annotations
@@ -55,6 +57,7 @@ class Item:
     plan: str
     speech: float | None = None   # 긴 무음을 뺀 추정 말소리 길이(초)
     ratio: float | None = None    # --speech-check: 남긴 구간 중 VAD가 말소리로 본 비율
+    lang: dict | None = None      # --language auto: 언어 판별 결과(langid.detect_spans)
 
     @property
     def vad_speech(self) -> float | None:
@@ -177,6 +180,29 @@ def _check_speech(items: list[Item], min_gap: float, trimmed: bool = True) -> No
                 item.speech = kept
 
 
+def check_language(items: list[Item], min_gap: float, trimmed: bool = True, detector=None) -> None:
+    """dry-run용 언어 판별. 소리 크기로 남긴 구간의 처음·중간·끝 30초를 원본에서 바로 읽는다(GPU, 차례로).
+    전사 때는 run_one이 화자분리 구간으로 다시 판별하므로 여기 결과는 미리보기다."""
+    if not items:
+        return
+    from . import langid
+    if detector is None:
+        try:
+            import mlx_whisper  # noqa: F401
+        except ImportError:
+            cli.log("--language auto: 이 머신에 mlx-whisper가 없어 dry-run 언어 판별을 건너뜀 (전사 때는 판별함)")
+            return
+        from .engines import get_engine
+        detector = get_engine("local").detect_language
+    for n, item in enumerate(items, 1):
+        cli.log(f"언어 판별 [{n}/{len(items)}] {item.path.name}")
+        try:
+            keep = trim.plan(trim.loudness_file(item.path), min_gap).keep if trimmed else [(0.0, item.sec or 0.0)]
+            item.lang = langid.detect_spans(keep, lambda a, b, f=item.path: speechcheck._clip(f, a, b - a), detector)
+        except Exception as e:  # 미리보기라 실패해도 계획은 그대로
+            cli.log(f"언어 판별 실패: {item.path.name} — {type(e).__name__}: {e}")
+
+
 def _safe_speech(path: Path, min_gap: float = trim.MIN_GAP) -> float | None:
     try:
         return speech_sec(path, min_gap)
@@ -215,11 +241,15 @@ def report(items: list[Item]) -> str:
     ts = lambda x: fmt_ts(x) if x is not None else "-"  # noqa: E731
     checked = any(i.ratio is not None for i in items)
     vad_col = f"  {'VAD':>8}" if checked else ""
-    lines = [f"{'파일':<{w}}  {'길이':>8}  {'말소리':>8}{vad_col}  판정", "-" * (w + 30 + len(vad_col))]
+    langs = any(i.lang for i in items)
+    lang_col = f"  {'언어':<8}" if langs else ""
+    lines = [f"{'파일':<{w}}  {'길이':>8}  {'말소리':>8}{vad_col}{lang_col}  판정",
+             "-" * (w + 30 + len(vad_col) + len(lang_col))]
     for i in items:
         vad = f"  {ts(i.vad_speech):>8}" if checked else ""
+        lang = f"  {_lang_cell(i.lang):<8}" if langs else ""
         flag = " · 소음 위주?" if i.noisy else ""
-        lines.append(f"{i.path.name:<{w}}  {ts(i.sec):>8}  {ts(i.speech):>8}{vad}  {i.plan}{flag}")
+        lines.append(f"{i.path.name:<{w}}  {ts(i.sec):>8}  {ts(i.speech):>8}{vad}{lang}  {i.plan}{flag}")
     todo = [i for i in items if i.plan in (TODO, RETRY)]
     total = sum(i.work for i in todo)
     cut = sum((i.sec or 0) - i.work for i in todo)
@@ -235,12 +265,24 @@ def report(items: list[Item]) -> str:
         lines.append(f"VAD 표본으로 본 말소리 총 {fmt_ts(vad_total)}"
                      + (f" · 소음 위주로 보이는 {len(noisy)}개(말소리 {speechcheck.NOISY:.0%} 미만)는 전사 전에 확인 권장"
                         if noisy else ""))
+    if langs:
+        from collections import Counter
+        c = Counter(i.lang["verdict"] for i in todo if i.lang)
+        fb = sum(n for v, n in c.items() if v in ("mixed", "silent"))
+        lines.append("언어 판별(처음·중간·끝 30초): " + " · ".join(f"{v} {n}" for v, n in c.most_common())
+                     + (f" — mixed·silent {fb}개는 ko로 전사" if fb else ""))
     if counts[SPLIT]:
         lines.append(f"무음을 빼고도 {fmt_ts(MAX_SEC)}를 넘는 {counts[SPLIT]}개는 분할이 필요해 이번에는 건너뜀"
                      "(청크 분할은 아직 없음)")
     if counts[CLASH]:
         lines.append(f"출력 이름이 겹치는 {counts[CLASH]}개는 처리하지 않음 — 파일 이름을 바꾸거나 --out을 따로 지정")
     return "\n".join(lines)
+
+
+def _lang_cell(det: dict | None) -> str:
+    if not det:
+        return "-"
+    return det["verdict"] if det["verdict"] == det["language"] else f"{det['verdict']}→{det['language']}"
 
 
 def main(argv: list[str]) -> None:
@@ -267,6 +309,8 @@ def main(argv: list[str]) -> None:
         raise SystemExit(f"처리할 녹음·영상이 없음: {src_dir} ({', '.join(sorted(MEDIA_EXTS))})")
     items = plan(files, state, args.min_sec, estimate=not args.no_trim, min_gap=cli.trim_min_gap(args),
                  speech_check=args.speech_check)
+    if args.dry_run and args.language == cli.AUTO:
+        check_language([i for i in items if i.plan in (TODO, RETRY)], cli.trim_min_gap(args), trimmed=not args.no_trim)
     print(report(items))
     if args.dry_run:
         return

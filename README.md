@@ -53,6 +53,7 @@ uv tool install --editable '.[diarize,render,export,office]'
 ```sh
 rec2md meeting.m4a                 # → meeting.segments.json, meeting.raw.md
 rec2md call.mp3 --speakers 2       # 화자 수를 알면 지정
+rec2md talk.mp3 --language auto    # 언어 판별 후 전사 (섞였거나 모르면 ko, 기본은 ko 고정)
 rec2md talk.mov --no-diarize       # 영상도 됨, 화자분리 생략
 rec2md long.mp3 --no-trim          # 긴 무음을 자르지 않고 그대로 처리
 rec2md long.mp3 --trim-min-gap 10  # 10분 이상 이어진 무음만 자름 (기본 5분)
