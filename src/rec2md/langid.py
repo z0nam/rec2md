@@ -122,6 +122,7 @@ def summary(det: dict) -> str:
 # ---- 구간별 언어 (`--mixed-language per-region`) ----
 
 REGION_SURE = 0.8   # 청크가 FALLBACK이 아닌 언어로 바뀌려면 그 언어 확률이 이 이상이어야 한다
+RUN_GAP = 5.0       # 같은 언어 청크 사이 공백이 이 이하면 구간 하나로 합친다
 REGION_MIN_SEC = 3.0  # 이보다 짧은 청크는 판별이 불안정해 바로 앞 청크의 언어를 따른다
 
 
@@ -137,6 +138,7 @@ class RegionPicker:
         self.probs_fn, self.fallback, self.sure, self.min_sec = probs_fn, fallback, sure, min_sec
         self.candidates = list(dict.fromkeys([fallback, *candidates]))
         self.runs: list[list] = []
+        self.sec: dict[str, float] = {}
         self._prev = fallback
 
     def pick(self, clip: np.ndarray, start: float, end: float) -> str:
@@ -147,7 +149,9 @@ class RegionPicker:
             best = max(self.candidates, key=lambda c: probs.get(c, 0.0))
             lang = best if best == self.fallback or probs.get(best, 0.0) >= self.sure else self.fallback
         self._prev = lang
-        if self.runs and self.runs[-1][2] == lang:
+        self.sec[lang] = self.sec.get(lang, 0.0) + end - start   # 실제로 전사한 길이만 센다
+        # 같은 언어라도 RUN_GAP보다 긴 말소리 공백을 사이에 두면 따로 둔다(전사하지 않은 구간을 덮지 않게)
+        if self.runs and self.runs[-1][2] == lang and start - self.runs[-1][1] <= RUN_GAP:
             self.runs[-1][1] = round(end, 1)
         else:
             self.runs.append([round(start, 1), round(end, 1), lang])
@@ -157,10 +161,7 @@ class RegionPicker:
 
     def meta(self) -> dict:
         """meta["language_detect"]["regions"]: 언어별 초와 이어진 구간 목록(시각은 전사한 오디오 기준)."""
-        sec: dict[str, float] = {}
-        for s, e, lang in self.runs:
-            sec[lang] = round(sec.get(lang, 0.0) + e - s, 1)
-        return {"sec": sec, "runs": self.runs}
+        return {"sec": {k: round(v, 1) for k, v in self.sec.items()}, "runs": self.runs}
 
 
 def candidates_of(det: dict) -> list[str]:

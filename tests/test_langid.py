@@ -206,6 +206,14 @@ def test_region_picker_short_chunk_follows_previous():
     assert p.runs == [[0, 11.5, "en"]]
 
 
+def test_region_runs_do_not_cover_untranscribed_gaps():
+    p = langid.RegionPicker(lambda clip: {"en": 0.99}, ["ko", "en"])
+    clip = np.zeros(SR, np.float32)
+    p(clip, 0, 10), p(clip, 12, 20), p(clip, 100, 110)
+    assert p.runs == [[0, 20, "en"], [100, 110, "en"]]
+    assert p.meta()["sec"] == {"en": 28.0}
+
+
 def test_candidates_come_from_sure_windows():
     det = {"windows": [W("ko", 0.94), W("en", 1.0), W("ja", 0.3), W("silent", 0.0)]}
     assert langid.candidates_of(det) == ["ko", "en"]
