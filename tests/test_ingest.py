@@ -277,3 +277,32 @@ def test_quick_fingerprint_reads_head_and_tail_only(tmp_path):
     data[-1] ^= 0xFF
     c = _rec(tmp_path, "c", bytes(data))
     assert ig.quick_fp(a) != ig.quick_fp(c)
+
+
+def test_missing_archive_copy_is_restored_under_its_name(dirs):
+    rec, arc = dirs
+    _rec(rec, "REC00001.MP3", _data(1))
+    cmd_ingest.main([str(rec), str(arc)])
+    (arc / "REC00001.MP3").unlink()              # 보관본이 사라졌지만 녹음기에는 남아 있다
+    cmd_ingest.main([str(rec), str(arc)])
+    assert (arc / "REC00001.MP3").read_bytes() == _data(1)
+    (r,) = _manifest(arc).values()
+    assert r["name"] == "REC00001.MP3" and "previous_names" not in r
+
+
+def test_truncated_archive_copy_is_kept_and_recopied_under_new_name(dirs):
+    rec, arc = dirs
+    _rec(rec, "REC00001.MP3", _data(1))
+    cmd_ingest.main([str(rec), str(arc)])
+    (arc / "REC00001.MP3").write_bytes(_data(1)[:50])   # 잘린 보관본
+    cmd_ingest.main([str(rec), str(arc)])
+    assert (arc / "REC00001.MP3").read_bytes() == _data(1)[:50]   # 덮어쓰지 않는다
+    assert (arc / "REC00001-2.MP3").read_bytes() == _data(1)
+    (r,) = _manifest(arc).values()
+    assert r["name"] == "REC00001-2.MP3" and r["previous_names"] == ["REC00001.MP3"]
+    # 예전 이름은 계속 예약: 녹음기가 번호를 되감아 같은 이름의 새 녹음이 와도 그 이름을 쓰지 않는다
+    (arc / "REC00001.MP3").unlink()
+    (rec / "REC00001.MP3").unlink()
+    _rec(rec, "REC00001.MP3", _data(2))
+    cmd_ingest.main([str(rec), str(arc)])
+    assert not (arc / "REC00001.MP3").exists() and (arc / "REC00001-3.MP3").read_bytes() == _data(2)

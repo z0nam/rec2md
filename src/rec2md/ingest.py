@@ -37,7 +37,8 @@ SPACE_MARGIN = 1 << 30   # 복사 후에도 보관 디스크에 남겨 둘 여�
 PROGRESS_SEC = 30.0      # 긴 복사의 진행 로그 간격
 
 # 수집 판정
-NEW, KNOWN, RENAMED = "새 파일", "이미 받음", "새 파일(이름 겹침)"
+NEW, KNOWN, RENAMED, RESTORE = "새 파일", "이미 받음", "새 파일(이름 겹침)", "보관본 다시 받음"
+COPY = (NEW, RENAMED, RESTORE)   # 복사할 판정
 
 
 def log(msg: str) -> None:
@@ -137,16 +138,27 @@ def plan(recorder: Path, archive: Path, manifest: dict) -> list[Entry]:
     by_quick = {(r["size"], r.get("quick")): k for k, r in files.items()}
     # 보관 이름 예약: 디스크에 있는 이름 + 매니페스트가 기억하는 이름(사람이 옮겨도 다시 쓰지 않는다). 대소문자 무시
     taken = {p.name.casefold() for p in archive.iterdir()} if archive.is_dir() else set()
-    taken |= {r["name"].casefold() for r in files.values()}
+    taken |= {n.casefold() for r in files.values() for n in [r["name"], *r.get("previous_names", [])]}
     out = []
     for f in media_files(recorder):
         size = f.stat().st_size
         q = quick_fp(f, size)
         key = by_quick.get((size, q))
         if key:
-            e = Entry(f, size, q, KNOWN, files[key]["name"], key=key)
-            if files[key].get("source_name") != f.name:
-                e.notes.append(f"예전 녹음기 이름 {files[key].get('source_name')}")
+            rec = files[key]
+            kept = archive / rec["name"]
+            if kept.is_file() and kept.stat().st_size == rec["size"]:
+                e = Entry(f, size, q, KNOWN, rec["name"], key=key)
+                if rec.get("source_name") != f.name:
+                    e.notes.append(f"예전 녹음기 이름 {rec.get('source_name')}")
+                out.append(e)
+                continue
+            # 매니페스트에는 있는데 보관본이 사라졌거나 크기가 다르다 → 녹음기에 원본이 남아 있으니 다시 받는다.
+            # 그 이름이 비어 있으면 같은 이름으로, 무언가 있으면 덮어쓰지 않고 새 이름으로
+            dest = rec["name"] if not kept.exists() else _free_name(f.name, taken)
+            taken.add(dest.casefold())
+            e = Entry(f, size, q, RESTORE, dest)
+            e.notes.append(f"보관본 {rec['name']}가 {'없음' if not kept.exists() else '크기가 다름'}")
             out.append(e)
             continue
         dest = _free_name(f.name, taken)
@@ -186,7 +198,7 @@ def adopt_existing(entries: list[Entry], archive: Path, manifest: dict) -> None:
 
 
 def free_space_problem(entries: list[Entry], archive: Path) -> str | None:
-    need = sum(e.size for e in entries if e.kind in (NEW, RENAMED))
+    need = sum(e.size for e in entries if e.kind in COPY)
     if not need:
         return None
     free = shutil.disk_usage(archive).free
@@ -222,8 +234,16 @@ def copy_in(e: Entry, archive: Path, manifest: dict) -> None:
         raise FileExistsError(f"보관 폴더에 {e.dest}가 그새 생겨 덮어쓰지 않음 ({part.name}는 남겨 둠)")
     os.rename(part, final)
     e.sha1, e.key = sha1, fp_key(e.size, sha1)
-    manifest["files"][e.key] = {"name": e.dest, "source_name": e.src.name, "size": e.size, "sha1": sha1,
-                                "quick": e.quick, "ingested_at": _now()}
+    new = {"name": e.dest, "source_name": e.src.name, "size": e.size, "sha1": sha1, "quick": e.quick,
+           "ingested_at": _now()}
+    old = manifest["files"].get(e.key)
+    if old:   # 보관본을 다시 받음: 예전 이름은 계속 예약하고 이동 기록은 남긴다
+        prev = [*old.get("previous_names", []), *([old["name"]] if old["name"] != e.dest else [])]
+        if prev:
+            new["previous_names"] = prev
+        if old.get("moved_to"):
+            new["moved_to"] = old["moved_to"]
+    manifest["files"][e.key] = new
 
 
 def _now() -> str:

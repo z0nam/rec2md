@@ -110,7 +110,7 @@ def report(entries: list[ig.Entry]) -> str:
     for e in entries:
         note = f"  ({'; '.join(e.notes)})" if e.notes else ""
         lines.append(f"{e.src.name:<{w}}  {e.size / 2**20:7.1f}M  {e.kind} → {e.dest}{note}")
-    new = [e for e in entries if e.kind in (ig.NEW, ig.RENAMED)]
+    new = [e for e in entries if e.kind in ig.COPY]
     mb = sum(e.size for e in new) / 2**20
     lines += ["", (f"새로 받을 것 {len(new)}개 · {mb:.0f}MB · 녹음기 0.5MB/s면 약 {mb / 0.5 / 60:.0f}분"
                    f" · 이미 받음 {len(entries) - len(new)}개")]
@@ -128,7 +128,7 @@ def move_report(entries: list[ig.Entry], arc: Path, manifest: dict, out: Path, d
 
 
 def _copy_all(entries: list[ig.Entry], arc: Path, manifest: dict) -> list[ig.Entry]:
-    todo = [e for e in entries if e.kind in (ig.NEW, ig.RENAMED)]
+    todo = [e for e in entries if e.kind in ig.COPY]
     if not todo:
         return []
     problem = ig.free_space_problem(entries, arc)
