@@ -180,7 +180,8 @@ def _check_speech(items: list[Item], min_gap: float, trimmed: bool = True) -> No
                 item.speech = kept
 
 
-def check_language(items: list[Item], min_gap: float, trimmed: bool = True, detector=None) -> None:
+def check_language(items: list[Item], min_gap: float, trimmed: bool = True, detector=None,
+                   model: str | None = None) -> None:
     """dry-run용 언어 판별. 소리 크기로 남긴 구간의 처음·중간·끝 30초를 원본에서 바로 읽는다(GPU, 차례로).
     전사 때는 run_one이 화자분리 구간으로 다시 판별하므로 여기 결과는 미리보기다."""
     if not items:
@@ -193,7 +194,7 @@ def check_language(items: list[Item], min_gap: float, trimmed: bool = True, dete
             cli.log("--language auto: 이 머신에 mlx-whisper가 없어 dry-run 언어 판별을 건너뜀 (전사 때는 판별함)")
             return
         from .engines import get_engine
-        detector = get_engine("local").detect_language
+        detector = get_engine("local", model=model).detect_language  # 전사(run_one)와 같은 모델로
     for n, item in enumerate(items, 1):
         cli.log(f"언어 판별 [{n}/{len(items)}] {item.path.name}")
         try:
@@ -310,7 +311,8 @@ def main(argv: list[str]) -> None:
     items = plan(files, state, args.min_sec, estimate=not args.no_trim, min_gap=cli.trim_min_gap(args),
                  speech_check=args.speech_check)
     if args.dry_run and args.language == cli.AUTO:
-        check_language([i for i in items if i.plan in (TODO, RETRY)], cli.trim_min_gap(args), trimmed=not args.no_trim)
+        check_language([i for i in items if i.plan in (TODO, RETRY)], cli.trim_min_gap(args), trimmed=not args.no_trim,
+                       model=args.model)
     print(report(items))
     if args.dry_run:
         return

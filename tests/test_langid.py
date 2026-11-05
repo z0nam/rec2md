@@ -172,3 +172,15 @@ def test_dry_run_without_auto_has_no_language_column(tmp_path, monkeypatch):
     monkeypatch.setattr(cmd_batch, "check_language", lambda *a, **k: pytest.fail("auto가 아니면 판별하지 않음"))
     monkeypatch.setattr("sys.argv", ["rec2md"])
     cmd_batch.main([str(d), "--dry-run"])
+
+
+def test_dry_run_detects_with_selected_model(tmp_path, monkeypatch):
+    d = tmp_path / "rec"
+    d.mkdir()
+    (d / "a.mp3").write_bytes(b"")
+    monkeypatch.setattr(cmd_batch.audio, "probe_duration", lambda p: 600.0)
+    monkeypatch.setattr(cmd_batch, "speech_sec", lambda p, min_gap=0: 600.0)
+    seen = {}
+    monkeypatch.setattr(cmd_batch, "check_language", lambda items, gap, trimmed=True, model=None: seen.update(model=model))
+    cmd_batch.main([str(d), "--dry-run", "--language", "auto", "--model", "my/whisper"])
+    assert seen == {"model": "my/whisper"}
