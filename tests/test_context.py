@@ -84,6 +84,26 @@ def test_extract_terms_skips_function_words():
     assert "되는데" not in terms
 
 
+def test_extract_terms_keeps_school_abbrev():
+    # 학교 약칭 "○○고"는 끝 글자가 연결어미 "-고"와 같아도 체언 조사가 붙어 나오면 용어로 남긴다 (#47)
+    text = ("가람고에서 상담함. 가람고로 진학 희망. 가람고의 내신. "
+            "나래고등학교 방문. 나래고 설명회. 나래고 일정. "
+            "다솜고 다솜고 언급만 됨.")
+    terms = extract_terms(text)
+    assert "가람고" in terms
+    assert "나래고" in terms
+    assert "다솜고" not in terms  # 조사도 정식 이름도 없으면 활용형과 구분할 근거가 없다
+
+
+def test_extract_terms_still_drops_verbal_go():
+    # "-하고"·"-이고"·"-고는"·"-고도" 활용형은 계속 거른다
+    text = ("검토했고 검토했고 중요하고 중요하고 학생이고 학생이고 "
+            "확인하고는 확인하고는 알았고도 알았고도 진행하고 진행하고")
+    terms = extract_terms(text)
+    for w in ("검토했고", "중요하고", "학생이고", "확인하고", "알았고", "진행하고"):
+        assert w not in terms
+
+
 def test_prompt_echo_filtered():
     prompt = "홍길동, 김철수, 탐라데이터센터"
     segs = [Segment(0, 1, "홍길동, 김철수, 탐라데이터센터"), Segment(1, 2, "홍길동"),

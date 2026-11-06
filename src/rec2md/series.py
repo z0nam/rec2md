@@ -152,11 +152,15 @@ _STOP = set("""그리고 그러나 하지만 또한 및 등 통해 대한 위한
 _TOKEN = re.compile(r"[가-힣A-Za-z0-9][가-힣A-Za-z0-9·\-]*[가-힣A-Za-z0-9]")
 
 
-def _strip_josa(w: str) -> str:
+def _split_josa(w: str) -> tuple[str, str]:
     for j in _JOSA:
         if w.endswith(j) and len(w) - len(j) >= 2:
-            return w[: -len(j)]
-    return w
+            return w[: -len(j)], j
+    return w, ""
+
+
+def _strip_josa(w: str) -> str:
+    return _split_josa(w)[0]
 
 
 # 용언 활용꼴로 끝나는 토큰("되는데", "했는데", "같아요")은 용어가 아니다
@@ -170,12 +174,27 @@ def _looks_term(w: str) -> bool:
     return len(w) >= 3 and not _VERBAL.search(w) and not w.isdigit()
 
 
+# "○○고"(고등학교 약칭)는 끝 글자가 연결어미 "-고"와 같아 _VERBAL 에 걸린다(#47).
+# 체언 뒤에만 붙는 조사로 나온 적이 있으면 명사로 보고 살린다. "-고는"·"-고도"·"-고만"·"-고부터"는
+# 용언 활용("하고는", "알고도")에도 흔하므로 근거로 쓰지 않는다
+_NOUN_JOSA = frozenset("가 를 의 에 에서 에게 로 와 와의 에는 에서는 로는 보다 처럼 라는 랑".split())
+
+
+def _school_abbrevs(text: str, toks: list[tuple[str, str]]) -> set[str]:
+    """학교 약칭으로 볼 "○○고": 자료에 "○○고등학교"가 함께 나오거나, 체언 조사가 붙은 꼴이 2번 이상."""
+    noun = Counter(w for w, j in toks if j in _NOUN_JOSA and w.endswith("고"))
+    out = {w for w, c in noun.items() if c >= 2}
+    out |= {m + "고" for m in re.findall(r"([가-힣]{2,})고등학교", text)}
+    return out
+
+
 def extract_terms(text: str, limit: int = 60, min_count: int = 2) -> list[str]:
     """자료 본문 → 용어 후보. 형태소 분석 없이 두 번 이상 나온 3〜15자 토큰을 빈도·길이순으로."""
+    toks = [_split_josa(tok) for tok in _TOKEN.findall(text)]
+    schools = _school_abbrevs(text, toks)
     counts: Counter[str] = Counter()
-    for tok in _TOKEN.findall(text):
-        w = _strip_josa(tok)
-        if len(w) <= 15 and w not in _STOP and _looks_term(w):
+    for w, _ in toks:
+        if len(w) <= 15 and w not in _STOP and (_looks_term(w) or (w in schools and len(w) >= 3)):
             counts[w] += 1
     ranked = sorted((w for w, c in counts.items() if c >= min_count), key=lambda w: (-counts[w] * len(w), w))
     return ranked[:limit]
