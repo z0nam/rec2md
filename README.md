@@ -44,6 +44,7 @@ uv tool install --editable '.[diarize,render,export,office]'
 | `rec2md render --kind transcript ...` | segments.json → 클로바노트식 녹취록 (txt·md·html) | 동작 |
 | `rec2md voices ...` | 목소리 등록, 새 녹취에 실명 자동 태깅 | 동작 |
 | `rec2md batch <폴더>` | 폴더 일괄 전사, `--dry-run`(길이·추정 말소리 길이·예상 시간), 중단 후 이어서 | 동작 |
+| `rec2md ingest <녹음기 폴더> <보관 폴더>` | 녹음기의 새 녹음만 지문(크기+sha1)으로 골라 복사, `--batch`로 이어서 전사, `--move-processed`로 끝난 것만 녹음기 안에서 옮김 | 동작 |
 | `rec2md <파일> --remote studio` | Windows 등에서 ssh로 맥에 전사를 맡기고 결과를 받아 옴 (`batch`도 됨), `rec2md remote ...`로 job 관리 | 동작 |
 | `rec2md review <segments.json>` | 문장 클릭 재생 + 화자·문장 고치기, 복사, 요약·메모 (이 맥에서만 열리는 웹 화면) | 동작 |
 | `rec2md review --queue <cases.json>` | 사례를 하나씩 듣고 판정 → `answers.json` (평가 정답) | 동작 |
@@ -85,6 +86,20 @@ rec2md remote fetch <job>                      # 연결이 끊겨 중단됐으�
 - 맡긴 맥에는 `~/.cache/rec2md/remote/<job>/`가 생긴다. 원본은 처리가 끝나면 바로 지우고, 성공한 job은 결과를 받은 뒤 통째로 지운다. 실패한 job은 로그만 7일 남는다. 끝났는데 아직 받지 않은 결과는 `fetch`할 때까지 남긴다.
 - 올리기 전에 여유 공간이 파일 크기의 3배 이상인지 본다. 원격 job끼리는 하나씩 차례로 돌고, 따로 돌고 있는 rec2md가 있으면 경고한다.
 - 원격 실행 파일은 `~/.local/bin/rec2md`(비대화형 ssh PATH에 없어 경로로 부른다). 다르면 `REC2MD_REMOTE_BIN`(홈 기준 상대경로 가능).
+
+### 녹음기에서 받기 (`ingest`)
+
+녹음기의 새 녹음을 보관 폴더로 복사하고(sha1 확인), 원하면 이어서 전사하고, 전사가 끝난 것만 녹음기 안의 처리완료 폴더로 옮긴다. 상주 감시는 없고 녹음기를 꽂은 뒤 사람이 부른다.
+
+```sh
+rec2md ingest E:\REC_DIR D:\recordings --dry-run                      # 받을 것·옮길 것만 보기
+rec2md ingest E:\REC_DIR D:\recordings --batch -- --remote studio     # 받고 → batch로 전사 (`--` 뒤는 batch 옵션)
+rec2md ingest E:\REC_DIR D:\recordings --move-processed E:\처리완료   # 전사 done + sha1 일치만 녹음기 안에서 옮김
+```
+
+- 녹음기는 파일을 정리하면 번호를 되감아 **같은 이름의 다른 녹음**을 만든다. 그래서 녹음은 지문(크기 + sha1)으로 구분하고(`<보관 폴더>/.rec2md-ingest.json`), 보관 폴더에 같은 이름이 있으면 덮어쓰지 않고 `-2` 같은 접미사를 붙인다.
+- 녹음기는 느리다(USB 약 0.5MB/s). 이미 받았는지는 크기와 앞뒤 64KB로 보고, 새 파일은 한 번만 읽어 `.part`에 쓴 뒤 보관본 sha1이 같을 때만 이름을 바꾼다.
+- `--move-processed`는 녹음기와 같은 디스크의 폴더만 받는다(이름 바꾸기). 옵션이 없으면 녹음기에는 아무것도 쓰지 않는다. 지우는 기능은 없다.
 
 ### 맥락 보정 (회의 시리즈 용어집)
 
