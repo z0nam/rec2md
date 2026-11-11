@@ -3,6 +3,8 @@ name = "rec2md"
 version = "0.1.0"
 description = "녹음·영상 파일을 화자 구분 녹취록 Markdown으로 변환"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "mlx-whisper>=0.4.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
