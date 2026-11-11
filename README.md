@@ -9,6 +9,28 @@
 
 > 상태(2026-10-30): 전사·화자분리, 맥락 보정(`series`), 회의록 렌더(`render`), 화자 목소리 DB(`voices`), 검토 화면(`review`), 클로바식 녹취록 내보내기(`render --kind transcript`), 폴더 일괄 처리(`batch`), 녹음기를 안 끈 긴 무음 자르기 동작. 설계는 [`docs/PLAN.md`](docs/PLAN.md).
 
+## 시스템 요구사항
+
+| 항목 | 요구사항 |
+|---|---|
+| 전사 머신 | **Apple Silicon 맥**(M1 이상). local 엔진(mlx-whisper)은 Intel 맥·Windows·Linux에서 돌지 않는다 |
+| OS | macOS 13.5 이상(mlx 요구), 최신 버전 권장 |
+| 메모리 | **16GB 권장(실질 최소)**, 6시간 녹음을 여유 있게 돌리려면 24GB 이상. 8GB는 1시간 안쪽 짧은 녹음만 될 수 있고 스왑으로 느려질 수 있다(실측 안 함) |
+| 디스크 | 모델 캐시 약 3GB(Whisper large-v3-turbo 약 1.6GB + pyannote) + 녹음·결과물 |
+| Python | 3.11〜3.13, [uv](https://docs.astral.sh/uv/) |
+| 외부 도구 | ffmpeg(필수). 렌더·내보내기에 Chrome, LibreOffice, rhwp는 쓰는 기능에만 필요 |
+| 계정 | 화자분리에 Hugging Face read 토큰(아래). 클라우드 엔진(RTZR·CLOVA)은 선택 |
+| Windows | 전사는 하지 않고 ssh로 맥에 맡기는 입구로만 쓴다(`--remote`). ffmpeg + rec2md, 맥에 키 기반 ssh |
+
+메모리 근거(studio, 64GB에서 측정, 상세는 [`docs/PLAN.md`](docs/PLAN.md)의 "긴 녹음 메모리 실측"):
+
+- 화자분리: 모델·고정분 약 3.5GB + 녹음 1시간당 약 0.5GB (1시간 5.0GB, 6시간 7.6GB)
+- 전사: 길이와 무관하게 최대 약 2.7GB (mlx 캐시 상한 1GB)
+- 전체 실행 최대치: 6시간 입력에서 상한 적용 전 21GB, 적용 후 약 12GB 추정. 1〜2시간 입력은 약 6〜8GB 추정
+- 처리 속도는 실시간의 약 11〜20배(studio 기준). 칩·메모리가 작으면 더 느리다
+
+16GB 이하 맥의 실측이 생기면 이 표를 고친다.
+
 ## 설치 (Apple Silicon Mac)
 
 ```sh
@@ -192,3 +214,7 @@ rec2md review --queue meeting.cases.json                       # 판정 모드
 ## 개인정보
 
 녹취, 전사 결과, `minutes.json`, 렌더한 회의록, 메모 정렬·보정본, 편집 로그·판정 답, 시리즈 용어집, 목소리 DB는 모두 개인 데이터다. 레포는 퍼블릭이므로 커밋하지 않는다(`.gitignore`가 주요 파일을 막는다). 테스트는 합성 데이터만 쓴다.
+
+## 라이선스
+
+[MIT](LICENSE). 내려받아 쓰는 모델(Whisper, pyannote `speaker-diarization-community-1`)과 클라우드 엔진은 각자의 라이선스·약관을 따른다.
