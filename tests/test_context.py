@@ -178,9 +178,11 @@ def test_build_prompt_english_skipped_when_few_terms():
 
 def test_build_prompt_english_respects_budget():
     ctx = Context(doc_terms=[f"Term{i:03d}" for i in range(200)])
-    prompt = build_prompt(ctx, max_tokens=50, language="en")
+    # 상한은 mlx 토크나이저가 없을 때(글자 수로 셈, 리눅스 CI)에도 항목 3개 이상이 들어가게 잡는다
+    prompt = build_prompt(ctx, max_tokens=120, language="en")
     assert prompt.startswith("Today we will talk about ") and prompt.endswith(".")
-    assert len(prompt) < 300
+    assert 3 <= prompt.count("Term") < 200
+    assert len(prompt) < 600
 
 
 def test_prompt_echo_filtered_english_sentence():
