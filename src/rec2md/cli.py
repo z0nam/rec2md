@@ -46,9 +46,9 @@ def run_one(src: Path, args) -> Path:
     log(f"{src.name} ({fmt_ts(duration)})")
     meta: dict = {}
     ctx = load_context(args)
-    prompt = build_prompt(ctx) if ctx and args.prompt else None
-    if prompt:
-        meta["initial_prompt"] = prompt
+    use_prompt = bool(ctx) and args.prompt
+    # 프롬프트 형식은 전사 언어에 따라 다르다(series.build_prompt). auto면 판별 뒤에 다시 만든다
+    prompt = build_prompt(ctx, language=args.language) if use_prompt else None
     with tempfile.TemporaryDirectory(prefix="rec2md-") as td:
         wav = audio.normalize(src, Path(td) / "audio.wav")
         offsets = None
@@ -72,6 +72,8 @@ def run_one(src: Path, args) -> Path:
         language, picker = args.language, None
         if language == AUTO:
             language = _detect_language(engine, wav, turns, meta)
+            if use_prompt:
+                prompt = engine.prompt = build_prompt(ctx, language=language) or None
             picker = _region_picker(engine, meta["language_detect"], regions, args)
             if picker is not None:
                 from .langid import split_long
@@ -79,6 +81,10 @@ def run_one(src: Path, args) -> Path:
                 regions = split_long(regions, audio.load_wav(wav))
                 meta["language_detect"]["split_chunks"] = len(regions) - n
         t0 = time.monotonic()
+        if prompt:
+            meta["initial_prompt"] = prompt
+        elif use_prompt:
+            log("맥락 용어가 적어 initial_prompt를 넣지 않음")
         segs = engine.transcribe(wav, picker or language, regions)
         segs = drop_known_hallucinations(collapse_ngram_loops(collapse_repeats(segs)), prompt)
         meta["asr_sec"] = round(time.monotonic() - t0, 1)

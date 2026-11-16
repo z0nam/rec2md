@@ -142,3 +142,51 @@ def test_find_candidates():
     assert not any(c["text"] == "중요합니다" for c in cands)  # 확률만 조금 낮은 구간은 후보가 아니다
     dojeong = next(c for c in cands if c["text"] == "도정")  # 매우 낮은 확률이면 올리되
     assert dojeong["suggest"] == []  # 2음절 용어(도청)는 근사 제안하지 않는다
+
+
+EN_SLIDES = """Federated Learning and Differential Privacy
+The answer is that the data stays on the device. The model is trained in the one place only.
+notesSlides notesSlides notesSlides
+Federated Learning keeps the data local. Differential Privacy adds noise to the answer.
+Students should read the slides. The students and the answer and the slides.
+TensorFlow Federated is one framework. TensorFlow Federated runs the simulation.
+GDPR and HIPAA apply. GDPR GDPR HIPAA.
+Secure Aggregation hides each update. Secure Aggregation is used in practice.
+"""
+
+
+def test_extract_terms_english_drops_stopwords_and_common_words():
+    terms = extract_terms(EN_SLIDES)
+    for w in ("the", "and", "is", "answer", "slides", "Students", "The", "notesSlides", "data"):
+        assert w not in terms
+    for w in ("Federated", "Privacy", "TensorFlow", "GDPR", "HIPAA", "Aggregation"):
+        assert w in terms
+
+
+def test_build_prompt_english_is_a_sentence():
+    ctx = Context(terms=["홍길동"], doc_terms=["TensorFlow", "GDPR", "HIPAA", "Secure"])
+    prompt = build_prompt(ctx, language="en")
+    assert prompt == "Today we will talk about TensorFlow, GDPR, HIPAA, and Secure."
+    assert "홍길동" not in prompt  # 한글 항목은 영어 전사를 한국어 쪽으로 끈다
+    # 한국어 경로는 그대로 쉼표 나열
+    assert build_prompt(ctx) == "홍길동, TensorFlow, GDPR, HIPAA, Secure"
+
+
+def test_build_prompt_english_skipped_when_few_terms():
+    assert build_prompt(Context(doc_terms=["GDPR", "HIPAA"]), language="en") == ""
+
+
+def test_build_prompt_english_respects_budget():
+    ctx = Context(doc_terms=[f"Term{i:03d}" for i in range(200)])
+    # 상한은 mlx 토크나이저가 없을 때(글자 수로 셈, 리눅스 CI)에도 항목 3개 이상이 들어가게 잡는다
+    prompt = build_prompt(ctx, max_tokens=120, language="en")
+    assert prompt.startswith("Today we will talk about ") and prompt.endswith(".")
+    assert 3 <= prompt.count("Term") < 200
+    assert len(prompt) < 600
+
+
+def test_prompt_echo_filtered_english_sentence():
+    prompt = build_prompt(Context(doc_terms=["TensorFlow", "GDPR", "HIPAA"]), language="en")
+    segs = [Segment(0, 1, "TensorFlow, GDPR, and HIPAA."), Segment(1, 2, "GDPR fines are large")]
+    kept = [s.text for s in drop_known_hallucinations(segs, prompt)]
+    assert kept == ["GDPR fines are large"]
