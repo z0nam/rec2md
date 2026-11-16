@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from .segments import Segment
+from .series import EN_LEAD, prompt_items
 
 MAX_REPEAT = 3
 # 디코딩 루프는 단어가 붙어서 나온다. 이보다 길게 끊겼으면 새 발화로 보고 다시 센다
@@ -104,11 +105,13 @@ def _prompt_echo(t: str, prompt_items: list[str]) -> bool:
         if k and k in t:
             t = t.replace(k, "", 1)
             hits += 1
-    return hits >= 2 and not t
+    # 영어 프롬프트는 문장 틀("Today we will talk about … and …")이라 항목을 떼면 틀 낱말만 남는다
+    t = t.replace(_norm(EN_LEAD), "")
+    return hits >= 2 and re.fullmatch(r"(?:and)*", t, re.I) is not None
 
 
 def drop_known_hallucinations(segs: list[Segment], prompt: str | None = None) -> list[Segment]:
-    items = [x.strip() for x in prompt.split(",")] if prompt else []
+    items = prompt_items(prompt) if prompt else []
 
     def bogus(s: Segment) -> bool:
         t = _norm(s.text)

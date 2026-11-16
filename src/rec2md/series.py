@@ -188,13 +188,52 @@ def _school_abbrevs(text: str, toks: list[tuple[str, str]]) -> set[str]:
     return out
 
 
+# 영어 기능어·흔한 낱말. 영어 자료에서는 빈도순 상위를 이런 낱말이 차지한다
+_EN_STOP = frozenset("""a an the and or but nor so yet for of in on at to from by with without into onto over under
+about above below after before between through during within against among across along around
+is am are was were be been being do does did done have has had having can could will would shall should
+may might must not no yes it its this that these those there here then than as if when where while what
+which who whom whose why how all any each every both few more most other some such only own same too very
+just also again once i me my we our you your he him his she her they them their one two three
+use used using get got make made see new way like well many much first last next page slide slides
+answer question questions example examples note notes lecture class week today student students
+therefore however thank thanks everything main part set result results output input table figure section appendix
+introduction background method methods methodology analysis conclusion conclusions limitation limitations
+future direction directions problem objective proposed research summary overview discussion experiment experiments
+""".split())  # 뒤 두 줄: 발표 자료의 장 제목(BACKGROUND, Conclusion 등)
+_LATIN = re.compile(r"[A-Za-z]")
+_CAMEL_ARTIFACT = re.compile(r"^[a-z]{2,}[A-Z]")  # notesSlides 같은 슬라이드 파일 내부 이름. iPhone·eBay는 남는다
+
+
+def _latin_term(w: str, lower_seen: set[str]) -> bool:
+    """영문 토큰이 용어다운가: 약어(TDX)·숫자 섞임(GPT4)·고유명사(Bayes)만. 소문자 일반 낱말은 뺀다.
+
+    문장 첫머리라 대문자로 시작한 일반 낱말("Students")은 자료 어딘가에 소문자로도 나오므로 그걸로 거른다."""
+    if w.lower() in _EN_STOP or _CAMEL_ARTIFACT.match(w):
+        return False
+    if not re.search(r"[A-Z0-9]", w):
+        return False
+    if w[0].isupper() and w[1:].islower() and w.lower() in lower_seen:
+        return False
+    return len(w) >= 3 or w.isupper()
+
+
 def extract_terms(text: str, limit: int = 60, min_count: int = 2) -> list[str]:
-    """자료 본문 → 용어 후보. 형태소 분석 없이 두 번 이상 나온 3〜15자 토큰을 빈도·길이순으로."""
+    """자료 본문 → 용어 후보. 형태소 분석 없이 두 번 이상 나온 3〜15자 토큰을 빈도·길이순으로.
+
+    한글이 없는 영문 토큰은 _latin_term으로 따로 거른다(영어 자료의 불용어·일반 낱말 제외)."""
     toks = [_split_josa(tok) for tok in _TOKEN.findall(text)]
     schools = _school_abbrevs(text, toks)
+    lower_seen = {w for w, _ in toks if w.islower()}
     counts: Counter[str] = Counter()
     for w, _ in toks:
-        if len(w) <= 15 and w not in _STOP and (_looks_term(w) or (w in schools and len(w) >= 3)):
+        if len(w) > 15 or w in _STOP:
+            continue
+        if not re.search(r"[가-힣]", w) and _LATIN.search(w):
+            ok = _latin_term(w, lower_seen)
+        else:
+            ok = _looks_term(w) or (w in schools and len(w) >= 3)
+        if ok:
             counts[w] += 1
     ranked = sorted((w for w, c in counts.items() if c >= min_count), key=lambda w: (-counts[w] * len(w), w))
     return ranked[:limit]
@@ -237,11 +276,42 @@ def _count_tokens(text: str) -> int:
     return len(tok.encode(" " + text)) if tok else len(text)
 
 
-def build_prompt(ctx: Context, max_tokens: int = PROMPT_TOKENS) -> str:
-    """참석자 → 용어집 → 자료 후보 순으로, 상한을 넘기 전까지 쉼표로 잇는다."""
-    out: list[str] = []
-    for item in dict.fromkeys(ctx.attendees + ctx.terms + ctx.doc_terms):
-        if _count_tokens(", ".join(out + [item])) > max_tokens:
+EN_LEAD = "Today we will talk about "  # 영어 프롬프트의 문장 틀. clean이 메아리 판정 때 떼어 낸다
+EN_MIN_TERMS = 3  # 영어에서 걸러진 용어가 이보다 적으면 프롬프트를 넣지 않는다
+
+
+def build_prompt(ctx: Context, max_tokens: int = PROMPT_TOKENS, language: str | None = "ko") -> str:
+    """참석자 → 용어집 → 자료 후보 순으로, 상한을 넘기 전까지 잇는다.
+
+    한국어(기본)는 쉼표로 나열한다. 영어는 Whisper가 프롬프트의 문체(쉼표 남발 등)를 흉내 내므로 평범한 구어 문장
+    한 줄로 만든다: "Today we will talk about X, Y, and Z." 한글 항목은 영어 전사를 한국어 쪽으로 끌 수 있어 뺀다.
+    """
+    items = list(dict.fromkeys(ctx.attendees + ctx.terms + ctx.doc_terms))
+    if language != "en":
+        out: list[str] = []
+        for item in items:
+            if _count_tokens(", ".join(out + [item])) > max_tokens:
+                break
+            out.append(item)
+        return ", ".join(out)
+    items = [x for x in items if not re.search(r"[가-힣]", x)]
+    out = []
+    for item in items:
+        if _count_tokens(_en_sentence(out + [item])) > max_tokens:
             break
         out.append(item)
-    return ", ".join(out)
+    return _en_sentence(out) if len(out) >= EN_MIN_TERMS else ""
+
+
+def _en_sentence(items: list[str]) -> str:
+    if not items:
+        return ""
+    body = items[0] if len(items) == 1 else ", ".join(items[:-1]) + ", and " + items[-1]
+    return f"{EN_LEAD}{body}."
+
+
+def prompt_items(prompt: str) -> list[str]:
+    """프롬프트 → 항목 목록(한국어 쉼표 나열과 영어 문장 둘 다)."""
+    if prompt.startswith(EN_LEAD):
+        prompt = prompt[len(EN_LEAD):].rstrip(".")
+    return [re.sub(r"^and ", "", x.strip()) for x in prompt.split(",") if x.strip()]
