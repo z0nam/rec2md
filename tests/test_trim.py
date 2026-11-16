@@ -141,3 +141,42 @@ def test_cli_trim_min_gap_in_minutes():
     assert cli.trim_min_gap(cli.build_parser().parse_args(["x.mp3", "--trim-min-gap", "10"])) == 600.0
     with pytest.raises(SystemExit):
         cli.build_parser().parse_args(["x.mp3", "--trim-min-gap", "0.5"])
+
+
+def _quiet_lecture(sec: int = 2014) -> np.ndarray:
+    """휴대폰으로 녹음한 조용한 강의: 말소리가 쉬지 않고 -34dB 안팎, 가끔 -30dB를 넘는다.
+    하위 20%도 말소리라 잡음 바닥 + 15dB가 상한 -30dB에 걸린다."""
+    rng = np.random.default_rng(2)
+    db = -34.0 + rng.normal(0, 2.5, sec)
+    db[585:675] = -28.0 + rng.normal(0, 2, 90)  # 1분 30초만 조금 크게(마이크 가까이 온 순간)
+    return db.astype(np.float32)
+
+
+def test_quiet_continuous_speech_is_not_cut():
+    """말소리가 이어지는 조용한 녹음은 무음 후보가 남긴 구간보다 조용하지 않아 자르지 않는다."""
+    db = _quiet_lecture()
+    p = trim.plan(db)
+    assert p.threshold == trim.T_MAX
+    assert not p.trims() and p.kept_sec == len(db)
+    assert p.restored  # 대비가 모자라 되살린 구간을 남긴다
+
+
+def test_noisy_room_silence_still_cut():
+    """시끄러운 방(잡음 -40dB, 임계 상한 -30dB)의 긴 공백은 말소리보다 충분히 조용해 그대로 자른다."""
+    rng = np.random.default_rng(3)
+    db = np.concatenate([-25.0 + rng.normal(0, 4, 1800), -40.0 + rng.normal(0, 1.5, 3600),
+                         -25.0 + rng.normal(0, 4, 600)]).astype(np.float32)
+    p = trim.plan(db)
+    assert p.threshold == trim.T_MAX
+    assert len(p.cut) == 1 and not p.restored
+
+
+def test_trim_silence_records_skipped_reason(tmp_path):
+    """자르지 않았어도 대비 확인으로 되살린 구간은 meta.trim_skipped 에 남긴다."""
+    rng = np.random.default_rng(4)
+    amp = 10 ** (_quiet_lecture(900) / 20)  # 1초마다 그 크기의 잡음 → 1초 RMS가 그 dB가 되게
+    data = np.concatenate([rng.normal(0, a, audio.SAMPLE_RATE) for a in amp]).astype(np.float32)
+    src = audio.write_wav(tmp_path / "in.wav", data)
+    meta: dict = {}
+    assert cli._trim_silence(src, tmp_path / "t.wav", meta) == (src, None)
+    assert "trim" not in meta and meta["trim_skipped"]["restored"]

@@ -168,7 +168,13 @@ def _trim_silence(wav: Path, out: Path, meta: dict, min_gap: float | None = None
     from . import trim
     data = audio.load_wav(wav)
     p = trim.plan(trim.loudness(data), trim.MIN_GAP if min_gap is None else min_gap)
+    if p.restored:
+        log(f"무음 후보 {len(p.restored)}곳은 말소리 구간보다 충분히 조용하지 않아 자르지 않음(임계 {p.threshold:.0f}dB): "
+            + ", ".join(f"{fmt_ts(s)}-{fmt_ts(e)}" for s, e in p.restored))
     if not p.trims():
+        if p.restored:  # 자르지 않았어도 판정 근거는 남긴다
+            meta["trim_skipped"] = {"threshold_db": round(p.threshold, 1),
+                                    "restored": [[round(s, 1), round(e, 1)] for s, e in p.restored]}
         return wav, None
     m = trim.OffsetMap(p.keep)
     audio.write_wav(out, trim.cut_audio(data, p.keep))
