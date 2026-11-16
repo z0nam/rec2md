@@ -10,6 +10,11 @@
   -30dB로 새로 잘리는 구간 5곳을 Whisper로 들어 보니 4곳은 무음 환각뿐, 1곳은 먼 말소리 조각일 수 있었다.
 - 1분 창에서 10% 이상이 임계값을 넘으면 말소리 창. 말소리 창 앞뒤로 PAD만큼 남긴다.
 - 그 사이 비는 곳이 MIN_GAP(기본 5분, `--trim-min-gap`) 이상일 때만 잘라낸다. 애매하면 남긴다 — 남기면 시간만 들지만 자르면 내용을 잃는다.
+- 대비 확인: 잘라낼 구간의 소리 크기 중앙값이 남길 구간의 중앙값보다 MIN_CONTRAST 이상 낮을 때만 자른다.
+  말소리가 쉬지 않고 이어지는 조용한 녹음(휴대폰으로 녹음한 강의 등)은 하위 20%도 말소리라 "잡음 바닥"이 곧 말소리
+  레벨이고, 임계값이 상한 -30dB에 걸린다. 그러면 -34dB 안팎으로 계속 말하는 33분 강의가 1분 30초만 남고 잘렸다.
+  실측(2026-11-16): 녹음기 파일 7개의 잘라낸 구간은 남긴 구간보다 9.4〜31.7dB 조용했고, 그 강의는 0.5〜0.7dB였다.
+  대비가 모자란 구간은 자르지 않고 `restored`로 남긴다.
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ WINDOW = 60          # 말소리 판정 창(초)
 ACTIVE_FRAC = 0.10   # 창 안에서 임계값을 넘는 초의 비율
 PAD = 15.0           # 말소리 창 앞뒤로 남길 여유(초)
 FLOOR_PCT, MARGIN, T_MIN, T_MAX = 20, 15.0, -45.0, -30.0
+MIN_CONTRAST = 6.0   # 잘라낼 구간이 남길 구간보다 이만큼(dB, 중앙값끼리) 조용해야 자른다
 
 
 def loudness_file(path, rate: int = 8000) -> np.ndarray:
@@ -70,6 +76,7 @@ class Plan:
     threshold: float
     review: list[tuple[float, float]] = None  # 잘라냈지만 약한 소리가 있던 1분 창(원본 초)
     min_gap: float = MIN_GAP
+    restored: list[tuple[float, float]] = None  # 무음 후보였지만 남긴 구간보다 충분히 조용하지 않아 남긴 곳(원본 초)
 
     @property
     def kept_sec(self) -> float:
@@ -97,20 +104,39 @@ def plan(db: np.ndarray, min_gap: float = MIN_GAP) -> Plan:
         else:
             keep.append((s, e))
     if not keep:  # 말소리를 못 찾으면 자르지 않는다(판정을 믿지 않는 편이 안전)
-        return Plan([(0.0, dur)], [], dur, t, [], min_gap)
+        return Plan([(0.0, dur)], [], dur, t, [], min_gap, [])
     # 처음·끝의 짧은 무음은 남긴다 — 앞뒤도 min_gap 이상일 때만 자른다
     if keep[0][0] < min_gap:
         keep[0] = (0.0, keep[0][1])
     if dur - keep[-1][1] < min_gap:
         keep[-1] = (keep[-1][0], dur)
-    cut, prev = [], 0.0
-    for s, e in keep:
+    cut = _complement(keep, dur)
+    # 대비 확인: 남길 구간보다 충분히 조용하지 않은 "무음"은 말소리일 수 있으니 자르지 않는다
+    kept_db = float(np.median(db[_mask(keep, len(db))]))
+    restored = [(s, e) for s, e in cut if kept_db - float(np.median(db[int(s):int(e)])) < MIN_CONTRAST]
+    if restored:
+        cut = [c for c in cut if c not in restored]
+        keep = _complement(cut, dur)
+    return Plan(keep, cut, dur, t, _review(active, cut), min_gap, restored)
+
+
+def _mask(spans: list[tuple[float, float]], n: int) -> np.ndarray:
+    m = np.zeros(n, dtype=bool)
+    for s, e in spans:
+        m[int(s):int(e)] = True
+    return m
+
+
+def _complement(spans: list[tuple[float, float]], dur: float) -> list[tuple[float, float]]:
+    """[0, dur]에서 spans(정렬, 겹침 없음)를 뺀 구간."""
+    out, prev = [], 0.0
+    for s, e in spans:
         if s > prev:
-            cut.append((prev, s))
+            out.append((prev, s))
         prev = e
     if prev < dur:
-        cut.append((prev, dur))
-    return Plan(keep, cut, dur, t, _review(active, cut), min_gap)
+        out.append((prev, dur))
+    return out
 
 
 def _review(active: np.ndarray, cut: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -172,4 +198,5 @@ def remap_spans(spans: list[tuple], m: OffsetMap) -> list[tuple]:
 def meta(p: Plan, m: OffsetMap) -> dict:
     return {"threshold_db": round(p.threshold, 1), "min_gap": p.min_gap, "kept_sec": round(p.kept_sec, 1),
             "cut": [[round(s, 1), round(e, 1)] for s, e in p.cut],
-            "review": [[round(s, 1), round(e, 1)] for s, e in p.review or []], "offsets": m.table()}
+            "review": [[round(s, 1), round(e, 1)] for s, e in p.review or []],
+            "restored": [[round(s, 1), round(e, 1)] for s, e in p.restored or []], "offsets": m.table()}
