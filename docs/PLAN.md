@@ -165,7 +165,7 @@ rec2md <audio> [--engine local|rtzr|clova]  # 기본 local [--call] [--speakers 
   - 계약은 "프롬프트 stdin → 요약 md stdout" 하나다. `--summarize-cmd` / `REC2MD_SUMMARIZE_CMD`로 `codex exec`나 로컬 LLM 래퍼로 바꾼다. 로컬 모델 구현은 아직 없다.
   - 입력은 화면에서 고친 지금 상태(화자 이름 반영)를 클로바 txt로 펼친 것 + `meeting_bounds` 추정. 지침은 `summarize.GUIDE` 한 곳(SKILL.md는 `rec2md review --print-guide`를 가리킴).
   - 결과는 `<이름>.요약.md`(`.part` → rename, 이전 것 `.요약.prev.md` 하나). 첫 줄 주석의 입력 지문으로 "요약이 편집보다 오래됨"을 판정한다. 손으로 쓴 요약은 편집 로그 수정시각으로 본다.
-  - 비동기: POST로 시작, 2초마다 상태 폴링. 같은 녹취는 프로세스 안 상태 + 잠금 파일(`.요약.lock`, pid)로 한 번에 하나만 돈다. 요약 탭은 이제 `.요약.md`를 `.녹취록.md`보다 먼저 보여 준다(만든 직후 보이게).
+  - 비동기: POST로 시작, 2초마다 상태 폴링. 같은 녹취는 프로세스 안 상태 + OS 파일 잠금(flock·msvcrt, 임시 폴더, 프로세스가 죽으면 풀림)으로 한 번에 하나만 돈다. 요약 탭은 이제 `.요약.md`를 `.녹취록.md`보다 먼저 보여 준다(만든 직후 보이게).
 - 회의 메모 보정의 "자료 → 용어 후보" 부분은 맥락 보정(`--context`, `notes --to-series`)이 맡는다. 대조는 `rec2md notes`가 근거 후보를 모으고 에이전트가 판단한다(정렬은 키워드·숫자·인명 겹침, 임베딩 없음).
 
 ## 위시리스트
