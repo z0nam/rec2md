@@ -159,8 +159,13 @@ rec2md <audio> [--engine local|rtzr|clova]  # 기본 local [--call] [--speakers 
 | 클로바식 녹취록 내보내기 | 진행 | `rec2md render <segments.json> --kind transcript --format txt,md,html` | #8 (이슈 #6) |
 | 화자 목소리 DB·자동 태깅 | 진행 | `rec2md voices enroll\|match\|list\|rename\|forget`, `meta.speaker_names`(`tentative`, `same_as`, `source: "user"`) | worker-1 |
 | 폴더 일괄 처리 | 진행 | `rec2md batch <dir> --dry-run`, 상태 파일로 이어서 | 이슈 #10 |
-| 검토 화면 | 동작 | `rec2md review <segments.json>`: 클릭 재생, 화자 변경 3범위(영향 미리보기, 훑어보기, 되돌리기), 문장 편집(`set_text`), 클로바 txt 복사, 오른쪽 패널(요약 읽기·메모 저장), 키워드 칩, `--queue` 판정 모드 | 이슈 #12 (worker-3) |
+| 검토 화면 | 동작 | `rec2md review <segments.json>`: 클릭 재생, 화자 변경 3범위(영향 미리보기, 훑어보기, 되돌리기), 문장 편집(`set_text`), 클로바 txt 복사, 오른쪽 패널(요약 읽기·"요약 만들기"·메모 저장), 키워드 칩, `--queue` 판정 모드 | 이슈 #12 (worker-3) |
 
+- 검토 화면 "요약 만들기"(2026-11-17, `summarize.py`): 요약은 에이전트 CLI를 서브프로세스로 돌려 만든다(기본 `claude -p`, 구독 로그인 사용, API 키 받지 않음).
+  - 계약은 "프롬프트 stdin → 요약 md stdout" 하나다. `--summarize-cmd` / `REC2MD_SUMMARIZE_CMD`로 `codex exec`나 로컬 LLM 래퍼로 바꾼다. 로컬 모델 구현은 아직 없다.
+  - 입력은 화면에서 고친 지금 상태(화자 이름 반영)를 클로바 txt로 펼친 것 + `meeting_bounds` 추정. 지침은 `summarize.GUIDE` 한 곳(SKILL.md는 `rec2md review --print-guide`를 가리킴).
+  - 결과는 `<이름>.요약.md`(`.part` → rename, 이전 것 `.요약.prev.md` 하나). 첫 줄 주석의 입력 지문으로 "요약이 편집보다 오래됨"을 판정한다. 손으로 쓴 요약은 편집 로그 수정시각으로 본다.
+  - 비동기: POST로 시작, 2초마다 상태 폴링. 같은 녹취는 프로세스 안 상태 + OS 파일 잠금(flock·msvcrt, 임시 폴더, 프로세스가 죽으면 풀림)으로 한 번에 하나만 돈다. 요약 탭은 이제 `.요약.md`를 `.녹취록.md`보다 먼저 보여 준다(만든 직후 보이게).
 - 회의 메모 보정의 "자료 → 용어 후보" 부분은 맥락 보정(`--context`, `notes --to-series`)이 맡는다. 대조는 `rec2md notes`가 근거 후보를 모으고 에이전트가 판단한다(정렬은 키워드·숫자·인명 겹침, 임베딩 없음).
 
 ## 위시리스트

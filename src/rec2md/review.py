@@ -17,7 +17,8 @@
   - 문장을 고치면 그 세그먼트의 단어 시각(words)·낮은 확률 구간(low_conf)은 버린다. 고친 글자와 맞지 않는다
 
 화면 옆에 붙는 파일(모두 segments.json과 같은 폴더)
-- `<이름>.녹취록.md` 또는 `<이름>*.요약.md`: 오른쪽 패널 `요약` 탭에 읽기 전용으로 보인다
+- `<이름>.요약.md`, `<이름>.녹취록.md`, `<이름>*.요약.md`: 오른쪽 패널 `요약` 탭에 읽기 전용으로 보인다.
+  탭의 "요약 만들기"는 `<이름>.요약.md`를 만들거나 다시 만든다(summarize.py. 에이전트가 쓴 `.녹취록.md`는 안 건드림)
 - `<이름>.memo.md`: `메모` 탭. 쓰는 대로 저장된다(`rec2md notes`의 메모 입력으로 쓸 수 있다)
 - `<이름>.corrections.json`, 시리즈 용어집: 위쪽 키워드 칩
 """
@@ -35,6 +36,7 @@ from .render import render_raw
 from .segments import Transcript
 from .series import parse_glossary, series_root
 from .speakers import display_name, is_user, user_entry, user_label_for
+from .summarize import fingerprint, split_mark
 from .transcript_export import render_clova_txt
 
 SCOPES = ("one", "after", "all")
@@ -128,7 +130,7 @@ def apply_edits(t: Transcript, edits: list[dict]) -> Transcript:
 
 def same(a: Transcript, b: Transcript) -> bool:
     """검토가 다루는 내용(구간·문장·화자·이름)이 같은가."""
-    key = lambda t: ([(s.start, s.end, s.text, s.speaker) for s in t.segments],  # noqa: E731
+    key = lambda t: ([(s.start, s.end, s.text, s.speaker) for s in t.segments],
                      t.meta.get("speaker_names") or {})
     return key(a) == key(b)
 
@@ -138,13 +140,15 @@ def side_file(seg: Path, stem: str, suffix: str) -> Path:
 
 
 def summary_file(seg: Path, stem: str) -> Path | None:
-    """요약 탭에 보일 md: `<이름>.녹취록.md`, `<이름>.요약.md`, 그다음 `<이름>…요약.md` 중 첫 것."""
-    for suf in (".녹취록.md", ".요약.md"):
+    """요약 탭에 보일 md: `<이름>.요약.md`, `<이름>.녹취록.md`, 그다음 `<이름>…요약.md` 중 첫 것.
+    `.요약.md`가 먼저다: 화면의 "요약 만들기"가 쓰는 파일이라, 만든 뒤 바로 보여야 한다."""
+    for suf in (".요약.md", ".녹취록.md"):
         if (p := side_file(seg, stem, suf)).is_file():
             return p
     # glob은 이름 속 [ ] 를 패턴으로 읽으므로 직접 거른다
     found = sorted(p for p in seg.parent.iterdir()
-                   if p.is_file() and p.name.startswith(stem) and p.name.endswith(".요약.md"))
+                   if p.is_file() and p.name.startswith(stem) and p.name.endswith(".요약.md")
+                   and not p.name.endswith(".요약.prev.md"))
     return found[0] if found else None
 
 
@@ -255,8 +259,17 @@ class Session:
 
     def panel(self) -> dict:
         p = summary_file(self.seg, self.stem)
-        return {"summary": {"name": p.name, "text": p.read_text(encoding="utf-8")} if p else None,
-                "memo": self.memo(), "memo_name": self.memo_path.name}
+        summary = None
+        if p:
+            info, text = split_mark(p.read_text(encoding="utf-8"))
+            summary = {"name": p.name, "text": text, "generated": bool(info), "stale": self.summary_stale(p, info)}
+        return {"summary": summary, "memo": self.memo(), "memo_name": self.memo_path.name}
+
+    def summary_stale(self, p: Path, info: dict) -> bool:
+        """요약을 만든 뒤 녹취가 바뀌었나. 화면이 만든 요약은 입력 지문으로, 손으로 쓴 것은 편집 로그 수정시각으로."""
+        if info.get("segments"):
+            return info["segments"] != fingerprint(self.current)
+        return self.edits_path.is_file() and self.edits_path.stat().st_mtime > p.stat().st_mtime
 
     def save_memo(self, text: str, base: str | list[str]) -> str:
         """base는 화면이 마지막으로 읽거나 저장한 메모. 그사이 파일이 바뀌었으면 덮어쓰지 않는다.

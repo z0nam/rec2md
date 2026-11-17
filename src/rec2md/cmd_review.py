@@ -1,16 +1,19 @@
 """rec2md review — 녹취록 검토 화면(클릭 재생, 화자 지정)과 판정 모드.
 
-  rec2md review <이름>.segments.json [--audio <원본>] [--series <이름>] [--port 0] [--no-open]
+  rec2md review <이름>.segments.json [--audio <원본>] [--series <이름>] [--summarize-cmd "claude -p"] [--port 0] [--no-open]
   rec2md review --queue <이름>.cases.json [--audio <원본>]
+  rec2md review --print-guide        # 요약 지침 전문(summarize.GUIDE)
 
 표준 라이브러리 http.server로 127.0.0.1에만 띄운다. 페이지는 단일 HTML(외부 CDN 없음)이고, 오디오는
 HTTP Range(206)로 보내 탐색이 된다. 편집은 한 건마다 저장된다(review.Session). Ctrl-C로 끝낸다.
 옆 파일(요약 md, 메모, corrections.json)은 review.py 첫머리 참고.
+요약 탭의 "요약 만들기"는 summarize.Job이 외부 명령을 별도 스레드로 돌린다(POST로 시작, GET으로 상태 폴링).
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import mimetypes
@@ -24,6 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
+from . import summarize
 from .review import MemoConflict, Queue, Session
 
 MAX_BODY = 1 << 20
@@ -59,9 +63,17 @@ def parse_range(header: str, size: int) -> tuple[int, int] | None:
 class App:
     """요청 처리기에 넘길 상태: 검토 세션 또는 판정 큐, 그리고 오디오 경로."""
 
-    def __init__(self, session: Session | None, queue: Queue | None, audio: Path | None, series: str | None = None):
+    def __init__(self, session: Session | None, queue: Queue | None, audio: Path | None, series: str | None = None,
+                 summarize_cmd: str | None = None):
         self.session, self.queue, self.audio, self.series = session, queue, audio, series
         self.lock = threading.Lock()
+        self.job = (summarize.Job(session.seg, session.stem, summarize.resolve_cmd(summarize_cmd))
+                    if session else None)
+
+    def start_summary(self) -> None:
+        with self.lock:  # 편집 중간 상태를 집지 않게, 지금 화면 상태를 복사해 넘긴다
+            t, title = copy.deepcopy(self.session.current), self.session.title()
+        self.job.start(t, title)
 
     def state(self) -> dict:
         st = self.session.state() if self.session else self.queue.state()
@@ -99,6 +111,8 @@ def make_handler(app: App):
                     self._json(app.state())
             elif path == "/audio":
                 self._audio()
+            elif app.job and path == "/api/summarize":
+                self._json(app.job.status())
             elif app.session and path in ("/api/copy", "/api/panel", "/api/keywords"):
                 with app.lock:
                     if path == "/api/copy":
@@ -156,6 +170,17 @@ def make_handler(app: App):
                 self._json({"error": "JSON이 아님"}, HTTPStatus.BAD_REQUEST)
                 return
             path = self.path.split("?", 1)[0]
+            if path == "/api/summarize" and app.job:
+                try:
+                    app.start_summary()
+                except summarize.Busy as e:
+                    self._json({"error": str(e)}, HTTPStatus.CONFLICT)
+                    return
+                except summarize.SummarizeError as e:
+                    self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
+                    return
+                self._json(app.job.status(), HTTPStatus.ACCEPTED)
+                return
             try:
                 with app.lock:
                     if path == "/api/edit" and app.session:
@@ -222,10 +247,17 @@ def main(argv: list[str]) -> None:
     p.add_argument("--queue", type=Path, metavar="CASES", help="판정 모드: <이름>.cases.json")
     p.add_argument("--audio", type=Path, help="원본 오디오 (기본: segments의 source, cases의 audio를 옆에서 찾음)")
     p.add_argument("--series", help="키워드 칩에 쓸 시리즈 용어집 (기본: corrections.json에 적힌 시리즈)")
+    p.add_argument("--summarize-cmd", metavar="CMD",
+                   help=f"요약 탭 '요약 만들기'에 쓸 명령. 프롬프트를 stdin으로 받아 md를 stdout으로 내는 것 "
+                        f"(기본: ${summarize.ENV_CMD} 또는 '{summarize.DEFAULT_CMD}')")
+    p.add_argument("--print-guide", action="store_true", help="요약 지침 전문을 출력하고 끝냄")
     p.add_argument("--port", type=int, default=0, help="포트 (기본 0: 빈 포트)")
     p.add_argument("--no-open", action="store_true", help="브라우저를 열지 않음")
     args = p.parse_args(argv)
 
+    if args.print_guide:
+        print(summarize.GUIDE, end="")
+        return
     if bool(args.segments) == bool(args.queue):
         raise SystemExit("segments.json 하나 또는 --queue <cases.json> 중 하나만 줄 것")
     session = queue = None
@@ -251,7 +283,7 @@ def main(argv: list[str]) -> None:
     else:
         audio = playable_audio(audio)
 
-    httpd = serve(App(session, queue, audio, args.series), args.port)
+    httpd = serve(App(session, queue, audio, args.series, args.summarize_cmd), args.port)
     url = f"http://127.0.0.1:{httpd.server_address[1]}/"
     log(f"{url} (Ctrl-C로 끝냄)")
     if not args.no_open:

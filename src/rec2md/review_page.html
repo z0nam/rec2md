@@ -73,6 +73,11 @@
     background: var(--bg); color: var(--fg); font: 14px/1.6 inherit; font-family: inherit; }
   .mstat { color: var(--muted); font-size: 12px; }
   .mstat.err { color: var(--warn); }
+  .sumbar { display: flex; align-items: center; gap: 8px; padding: 8px 16px 0; flex-wrap: wrap; }
+  .sumbar[hidden] { display: none; }
+  .sumbar .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .sumbar .mstat { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .stale { color: var(--warn); font-size: 12px; border: 1px solid var(--warn); border-radius: 4px; padding: 0 4px; }
   .md { font-size: 14px; }
   .md h1, .md h2, .md h3, .md h4 { line-height: 1.35; margin: 1em 0 .4em; }
   .md h1 { font-size: 18px; } .md h2 { font-size: 16px; } .md h3, .md h4 { font-size: 15px; }
@@ -183,6 +188,10 @@
     <button data-tab="memo" id="tabmemo">메모</button>
     <button class="x" id="panelclose" title="닫기">✕</button>
   </div>
+  <div class="sumbar" id="sumbar">
+    <button class="btn" id="sumgen" title="이 녹취(지금 화면의 화자 이름·고친 문장)로 요약을 만든다. 녹취 원문이 요약 명령(기본 claude -p)으로 전송된다">요약 만들기</button>
+    <span class="mstat" id="sumstat"></span>
+  </div>
   <div class="pbody md" id="psum"></div>
   <div class="pbody" id="pmemo" hidden>
     <textarea id="memo" placeholder="회의 메모. 쓰는 대로 저장됨" spellcheck="false"></textarea>
@@ -272,6 +281,7 @@ async function api(path, body) {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const data = await r.json();
   if (!r.ok) throw new Error(data.error || r.statusText);
+  if (path === "/api/edit" || path === "/api/undo") staleSoon();   // 편집하면 요약이 낡았는지 다시 본다
   return data;
 }
 
@@ -581,19 +591,59 @@ function tab(name) {
   $("tabsum").classList.toggle("on", name === "sum");
   $("tabmemo").classList.toggle("on", name === "memo");
   $("psum").hidden = name !== "sum";
+  $("sumbar").hidden = name !== "sum";
   $("pmemo").hidden = name !== "memo";
 }
 $("tabsum").onclick = () => tab("sum");
 $("tabmemo").onclick = () => tab("memo");
 $("panelbtn").onclick = () => $("panel").classList.toggle("open");
 $("panelclose").onclick = () => $("panel").classList.remove("open");
+// 요약 탭: 파일 표시 + "요약 만들기/다시 만들기"(서버가 요약 명령을 따로 돌리고 화면은 상태를 폴링)
+let sumHas = false, sumPoll = null, staleTimer = null;
+function showSummary(sm) {
+  sumHas = !!sm;
+  if (sm) {
+    const tag = sm.stale ? ' <span class="stale" title="요약을 만든 뒤 화자·문장을 고쳤다. 다시 만들면 반영된다">요약이 편집보다 오래됨</span>' : "";
+    $("psum").innerHTML = `<div class="mstat">${esc(sm.name)} (읽기 전용)${tag}</div>` + mdToHtml(sm.text);
+  } else {
+    $("psum").innerHTML = '<div class="mstat">요약 없음 — "요약 만들기"를 누르거나, 같은 폴더에 &lt;이름&gt;.요약.md 또는 &lt;이름&gt;.녹취록.md를 두면 보임</div>';
+  }
+}
+async function loadSummary() { showSummary((await api("/api/panel")).summary); }
+function staleSoon() {
+  clearTimeout(staleTimer);
+  staleTimer = setTimeout(() => loadSummary().catch(() => {}), 800);
+}
+function showJob(J) {
+  const b = $("sumgen"), st = $("sumstat");
+  b.textContent = sumHas ? "다시 만들기" : "요약 만들기";
+  b.disabled = !!J.disabled || J.state === "running";
+  b.title = J.disabled ? J.disabled
+    : `이 녹취(지금 화면의 화자 이름·고친 문장)로 요약을 만든다. 녹취 원문이 ${J.cmd}(으)로 전송된다`
+      + (sumHas ? ". 기존 요약은 .요약.prev.md로 하나 남는다" : "");
+  st.classList.toggle("err", J.state === "error" || !!J.disabled);
+  st.textContent = J.disabled ? J.disabled
+    : J.state === "running" ? `만드는 중… ${Math.round(J.elapsed)}초 (${J.cmd})`
+    : J.state === "done" ? `만듦 (${Math.round(J.elapsed)}초)`
+    : J.state === "error" ? `실패: ${J.error}` : "";
+}
+async function pollJob() {
+  clearTimeout(sumPoll);
+  const J = await api("/api/summarize");
+  showJob(J);
+  if (J.state === "running") sumPoll = setTimeout(() => pollJob().catch((e) => setStatus("요약 상태 확인 실패: " + e.message, true)), 2000);
+  else if (J.state === "done") { await loadSummary(); showJob(J); }
+}
+$("sumgen").onclick = async () => {
+  try {
+    showJob(await api("/api/summarize", {}));
+    pollJob();
+  } catch (e) { $("sumstat").classList.add("err"); $("sumstat").textContent = "실패: " + e.message; }
+};
 async function loadPanel() {
   const P = await api("/api/panel");
-  if (P.summary) {
-    $("psum").innerHTML = `<div class="mstat">${esc(P.summary.name)} (읽기 전용)</div>` + mdToHtml(P.summary.text);
-  } else {
-    $("psum").innerHTML = '<div class="mstat">요약 없음 — 같은 폴더에 &lt;이름&gt;.녹취록.md 또는 &lt;이름&gt;.요약.md가 생기면 다시 열 때 보임</div>';
-  }
+  showSummary(P.summary);
+  pollJob().catch((e) => setStatus("요약 상태 확인 실패: " + e.message, true));
   memoBase = P.memo;
   $("memo").value = P.memo;
   $("mstat").textContent = P.memo_name;
