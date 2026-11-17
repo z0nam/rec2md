@@ -31,6 +31,7 @@ rec2md <파일...> [--speakers N] [--no-diarize] [--no-voices] [--out <폴더>] 
      - 시리즈 맥락: `rec2md series init <이름> [--from-clova <txt>]`, `series add`, `series show --prompt`, 이미 전사한 결과에서 후보만 다시 뽑기 `series candidates <이름> <segments.json>`.
 3. **회의 구간**: `segments.json`의 `meta.meeting_bounds`(`start`·`end`·`confidence`·`evidence`)를 본다. 녹음기를 늦게 켜거나 안 꺼서 붙은 잡담·통화 후보다. `confidence`가 `none`이 아니면 근거 구간의 raw.md를 읽어 확인하고, 맞으면 요약은 그 구간만으로 쓰고 녹취록에는 범위 밖임을 표시한다(지우지 않는다). 애매하면 사용자에게 시각과 근거를 보여 주고 묻는다. 다시 보려면 `rec2md bounds <segments.json>`.
 4. **요약**(맨 위): 개요 / 주요 논의 / 결정사항 / 할 일(담당·기한이 나오면 함께). 회의 구간을 정했으면 그 안의 내용만 쓴다.
+   - 요약 지침 전문(형식·`[?]`·회의 구간 규칙)은 한 곳에 있다: `rec2md review --print-guide`. 3·4번과 어긋나면 그쪽이 맞다. 검토 화면의 "요약 만들기" 버튼도 같은 지침으로 `<이름>.요약.md`를 만든다.
 
 파일명이 `REC00012` 처럼 무의미하면 내용으로 `YYYYMMDD_주제` 제목을 제안만 하고, 실제 이름 변경은 사용자 확인 후. 여러 파일이면 6단계(백로그 색인).
 
