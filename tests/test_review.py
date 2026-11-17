@@ -419,3 +419,27 @@ def test_api_copy_panel_memo(server, seg_file):
     assert st == 200 and state["segments"][1]["edited"] is True
     st, _ = post(base + "/api/edit", text_edit(1, "문장1", "또 고침"))   # 낡은 from
     assert st == 400
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="ffmpeg 없음")
+def test_playable_audio_transcodes_mp2_named_mp3(tmp_path):
+    """확장자는 .MP3인데 코덱이 mp2인 녹음기 파일 → 재생용 mp3 사본. 재생 가능한 파일은 그대로."""
+    import subprocess
+
+    from rec2md import audio as audio_mod
+
+    src = tmp_path / "REC00001.MP3"
+    subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                    "-c:a", "mp2", "-f", "mp2", str(src)], check=True)
+    assert audio_mod.probe_codec(src) == "mp2"
+    cache = tmp_path / "cache"
+    out = cmd_review.playable_audio(src, cache)
+    assert out.parent == cache and out.suffix == ".mp3"
+    assert audio_mod.probe_codec(out) == "mp3"
+    mtime = out.stat().st_mtime
+    assert cmd_review.playable_audio(src, cache) == out and out.stat().st_mtime == mtime  # 다시 변환 안 함
+    assert cmd_review.playable_audio(out, cache) == out  # 이미 재생 가능
+    other = tmp_path / "other" / "REC00001.MP3"  # 다른 폴더의 같은 이름·크기·시각 파일은 다른 사본
+    other.parent.mkdir()
+    shutil.copy2(src, other)
+    assert cmd_review.playable_audio(other, cache) != out
