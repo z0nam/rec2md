@@ -275,6 +275,15 @@ def test_print_guide(capsys):
     assert capsys.readouterr().out == summarize.GUIDE
 
 
+def test_loopback_host():
+    from rec2md.cmd_review import loopback
+
+    for ok in ("127.0.0.1", "127.0.0.1:9000", "LOCALHOST:1", "[::1]", "[::1]:8080"):
+        assert loopback(ok), ok
+    for bad in ("", "evil.example", "localhost.evil.example", "127.0.0.1:abc", "127.0.0.1x", "[::2]:80", "localhost:"):
+        assert not loopback(bad), bad
+
+
 def test_job_start_failure_releases_lock_and_state(seg_file, fake, monkeypatch):
     """입력 만들기에서 터져도 잠금이 남거나 running에 머물지 않는다."""
     job = summarize.Job(seg_file, "meet", fake())
@@ -333,6 +342,11 @@ def test_cross_origin_requests_refused(seg_file, fake):
         assert _raw(base, "GET", "/api/state", {"Host": host})[0] == 200
         assert _raw(base, "POST", "/api/undo", {**ok, "Origin": f"http://{host}"})[0] == 200
         assert _raw(base, "GET", "/", {"Host": "localhost:" + host.split(":")[1]})[0] == 200
+        # ssh -L 9000:127.0.0.1:<포트>로 다른 머신에서 열면 포트가 바뀐다 → 호스트 이름만 본다
+        assert _raw(base, "GET", "/api/state", {"Host": "127.0.0.1:9000"})[0] == 200
+        assert _raw(base, "POST", "/api/undo", {**ok, "Host": "localhost:9000", "Origin": "http://localhost:9000"})[0] == 200
+        assert _raw(base, "GET", "/api/state", {"Host": "[::1]:9000"})[0] == 200
+        assert _raw(base, "GET", "/api/state", {"Host": "127.0.0.1.evil.example:9000"})[0] == 403
     finally:
         httpd.shutdown()
         httpd.server_close()
