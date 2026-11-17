@@ -439,3 +439,7 @@ def test_playable_audio_transcodes_mp2_named_mp3(tmp_path):
     mtime = out.stat().st_mtime
     assert cmd_review.playable_audio(src, cache) == out and out.stat().st_mtime == mtime  # 다시 변환 안 함
     assert cmd_review.playable_audio(out, cache) == out  # 이미 재생 가능
+    other = tmp_path / "other" / "REC00001.MP3"  # 다른 폴더의 같은 이름·크기·시각 파일은 다른 사본
+    other.parent.mkdir()
+    shutil.copy2(src, other)
+    assert cmd_review.playable_audio(other, cache) != out

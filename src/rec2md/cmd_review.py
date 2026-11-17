@@ -11,6 +11,7 @@ HTTP Range(206)로 보내 탐색이 된다. 편집은 한 건마다 저장된다
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import mimetypes
 import re
@@ -192,7 +193,7 @@ def playable_audio(audio: Path, cache_dir: Path | None = None) -> Path:
     """브라우저가 못 여는 코덱이면 재생용 mp3 사본을 임시 폴더에 만들어 그것을 준다.
 
     사본은 원본 옆이 아니라 임시 폴더에 둔다(원본이 녹음기 같은 외부 장치일 수 있음).
-    이름에 원본 크기·수정시각을 넣어 같은 파일은 다시 변환하지 않는다.
+    이름에 원본 경로·크기·수정시각 해시를 넣어 같은 파일은 다시 변환하지 않는다.
     """
     from . import audio as audio_mod
 
@@ -202,7 +203,9 @@ def playable_audio(audio: Path, cache_dir: Path | None = None) -> Path:
     st = audio.stat()
     cache = cache_dir or Path(tempfile.gettempdir()) / "rec2md-play"
     cache.mkdir(parents=True, exist_ok=True)
-    dst = cache / f"{audio.stem}-{st.st_size}-{int(st.st_mtime)}.mp3"
+    # 녹음기는 같은 RECnnnnn 번호를 다시 쓰므로 이름·크기만으로는 겹칠 수 있다 → 절대경로 해시와 ns 수정시각을 넣는다
+    key = hashlib.sha1(f"{audio.resolve()}|{st.st_size}|{st.st_mtime_ns}".encode()).hexdigest()[:12]
+    dst = cache / f"{audio.stem}-{key}.mp3"
     if not dst.is_file():
         log(f"{audio.name}: 브라우저가 재생 못 하는 코덱({codec}) → 재생용 mp3 만드는 중")
         audio_mod.to_mp3(audio, dst)
