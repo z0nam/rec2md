@@ -87,6 +87,14 @@ def check_cmd(cmd: str) -> str | None:
     return None
 
 
+def argv(cmd: str) -> list[str]:
+    """실행할 argv. 첫 토큰은 절대경로로 바꾼다: 명령은 빈 임시 폴더에서 돌리므로
+    `./wrapper` 같은 상대경로가 그대로면 거기서 못 찾는다."""
+    a = shlex.split(cmd)
+    exe = shutil.which(a[0])
+    return [os.path.abspath(exe) if exe else a[0], *a[1:]]
+
+
 # ---- 입력 ----
 
 def fingerprint(t: Transcript) -> str:
@@ -118,7 +126,7 @@ def run(cmd: str, prompt: str, timeout: float = TIMEOUT) -> str:
     # 작업 폴더를 빈 임시 폴더로: 에이전트 CLI가 지금 폴더의 프로젝트 지침·파일을 끌어오지 않게
     with tempfile.TemporaryDirectory(prefix="rec2md-summ-") as cwd:
         try:
-            r = subprocess.run(shlex.split(cmd), check=False, input=prompt, capture_output=True, text=True,
+            r = subprocess.run(argv(cmd), check=False, input=prompt, capture_output=True, text=True,
                                encoding="utf-8", errors="replace", timeout=timeout, cwd=cwd)
         except subprocess.TimeoutExpired:
             raise SummarizeError(f"{timeout:.0f}초 안에 끝나지 않음") from None
@@ -170,41 +178,49 @@ def split_mark(text: str) -> tuple[dict, str]:
 
 
 class Lock:
-    """같은 녹취에 요약이 두 번 동시에 돌지 않게 하는 잠금 파일(`<이름>.요약.lock`, 안에 pid).
-    다른 review 창이 같은 파일을 열어 둔 경우까지 막는다. 주인이 죽어 남은 잠금은 걷어낸다."""
+    """같은 녹취에 요약이 두 번 동시에 돌지 않게 하는 OS 파일 잠금(맥·리눅스 flock, Windows msvcrt).
+    다른 review 창(다른 프로세스)까지 막고, 쥔 프로세스가 죽으면 OS가 풀어 준다(낡은 잠금을 걷어낼 일이 없다).
+    잠금 파일은 녹취 폴더를 어지럽히지 않게 임시 폴더에 둔다(이름은 segments.json 절대경로의 해시)."""
 
     def __init__(self, seg: Path, stem: str):
-        self.path = seg.with_name(f"{stem}.요약.lock")
-
-    def held(self) -> bool:
-        """잠금 파일의 pid가 살아 있나(이 프로세스 자신도 포함: 잠금은 쥔 Job이 끝날 때 늘 푼다)."""
-        try:
-            pid = int(self.path.read_text().strip() or 0)
-        except (OSError, ValueError):
-            return False
-        if pid <= 0:
-            return False
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        return True
+        key = hashlib.sha1(str(seg.resolve()).encode("utf-8")).hexdigest()[:16]
+        self.path = Path(tempfile.gettempdir()) / f"rec2md-summarize-{key}.lock"
+        self._fd: int | None = None
 
     def acquire(self) -> bool:
-        if self.path.exists() and not self.held():
-            self.path.unlink(missing_ok=True)
-        try:
-            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
+        if self._fd is not None:
             return False
-        with os.fdopen(fd, "w") as f:
-            f.write(str(os.getpid()))
+        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return False
+        os.ftruncate(fd, 0)
+        os.write(fd, str(os.getpid()).encode())   # 사람이 볼 참고용. 판정은 OS 잠금으로만 한다
+        self._fd = fd
         return True
 
     def release(self) -> None:
-        self.path.unlink(missing_ok=True)
+        # 파일은 지우지 않는다: 지우면 다른 프로세스가 옛 파일에 잠금을 잡은 채 새 파일이 생기는 틈이 생긴다
+        if self._fd is None:
+            return
+        fd, self._fd = self._fd, None
+        try:
+            if os.name == "nt":
+                import msvcrt
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
 
 class Busy(RuntimeError):

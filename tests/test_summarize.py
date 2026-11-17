@@ -119,16 +119,45 @@ def test_save_atomic_with_one_backup(seg_file):
     assert not list(seg_file.parent.glob("*.part"))
 
 
-def test_lock_blocks_second_and_clears_stale(seg_file):
+def test_lock_is_exclusive_and_outside_transcript_folder(seg_file):
     lk = summarize.Lock(seg_file, "meet")
+    assert lk.path.parent != seg_file.parent       # 녹취 폴더를 어지럽히지 않는다
     assert lk.acquire()
-    other = summarize.Lock(seg_file, "meet")
-    lk.path.write_text(str(os.getppid()))          # 살아 있는 다른 프로세스가 쥔 것처럼
+    other = summarize.Lock(seg_file, "meet")       # 다른 창(별도 파일 디스크립터)
     assert not other.acquire()
-    lk.path.write_text("999999999")                # 죽은 pid → 걷어내고 잡는다
+    lk.release()
     assert other.acquire()
     other.release()
-    assert not lk.path.exists()
+
+
+def test_lock_held_by_other_process(seg_file):
+    """다른 프로세스가 쥐면 못 잡고, 그 프로세스가 끝나면(죽어도) OS가 풀어 준다."""
+    import subprocess
+
+    lk = summarize.Lock(seg_file, "meet")
+    code = ("import sys, time; sys.path[:0] = sys.argv[3:]\n"
+            "from pathlib import Path; from rec2md import summarize\n"
+            "l = summarize.Lock(Path(sys.argv[1]), 'meet'); assert l.acquire()\n"
+            "print('ok', flush=True); time.sleep(float(sys.argv[2]))")
+    p = subprocess.Popen([sys.executable, "-c", code, str(seg_file), "30", *sys.path], stdout=subprocess.PIPE, text=True)
+    try:
+        assert p.stdout.readline().strip() == "ok"
+        assert not lk.acquire()
+    finally:
+        p.kill()
+        p.wait()
+    assert lk.acquire()
+    lk.release()
+
+
+def test_relative_command_runs_from_temp_cwd(tmp_path, monkeypatch):
+    """./wrapper 같은 상대경로 명령도 빈 임시 폴더에서 돌 때 찾는다."""
+    w = tmp_path / "wrapper.sh"
+    w.write_text("#!/bin/sh\ncat >/dev/null\necho '## 개요'\n", encoding="utf-8")
+    w.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    assert summarize.check_cmd("./wrapper.sh") is None
+    assert summarize.run("./wrapper.sh", "x") == "## 개요"
 
 
 # ---- Session 패널 ----
@@ -176,7 +205,7 @@ def test_job_runs_once_and_writes(seg_file, fake):
     st = job.status()
     assert st["state"] == "done" and st["elapsed"] >= 0.5 and st["disabled"] is None
     assert "가짜 요약" in seg_file.with_name("meet.요약.md").read_text(encoding="utf-8")
-    assert not job.lock.path.exists()
+    assert summarize.Lock(seg_file, "meet").acquire()   # 끝나면 풀린다
 
 
 def test_job_error_releases_lock(seg_file, fake):
@@ -184,7 +213,7 @@ def test_job_error_releases_lock(seg_file, fake):
     job.start(Session(seg_file).current, "meet")
     job.wait(10)
     assert job.status()["state"] == "error" and "로그인 필요" in job.status()["error"]
-    assert not job.lock.path.exists() and not seg_file.with_name("meet.요약.md").exists()
+    assert job.lock._fd is None and not seg_file.with_name("meet.요약.md").exists()
 
 
 def test_job_missing_command_disabled(seg_file):
