@@ -97,7 +97,26 @@ def make_handler(app: App):
             self.end_headers()
             self.wfile.write(body)
 
+        def _same_origin(self, post: bool) -> str | None:
+            """다른 웹페이지가 이 서버를 부르지 못하게 한다. 문제가 있으면 거절 이유, 괜찮으면 None.
+            - Host: 127.0.0.1/localhost:<이 포트>만(DNS 리바인딩으로 남의 도메인이 이 서버를 가리키는 것 차단)
+            - Origin: 있으면 같은 출처만
+            - POST는 Content-Type: application/json만(폼·text/plain 단순 요청은 프리플라이트 없이 오므로 막는다)"""
+            port = self.server.server_address[1]
+            allowed = {f"127.0.0.1:{port}", f"localhost:{port}"}
+            if (self.headers.get("Host") or "").lower() not in allowed:
+                return "Host가 이 서버가 아님"
+            origin = self.headers.get("Origin")
+            if origin is not None and origin.lower() not in {f"http://{h}" for h in allowed}:
+                return "다른 출처의 요청"
+            if post and (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/json":
+                return "Content-Type은 application/json만"
+            return None
+
         def do_GET(self):
+            if why := self._same_origin(post=False):
+                self._json({"error": why}, HTTPStatus.FORBIDDEN)
+                return
             path = self.path.split("?", 1)[0]
             if path == "/":
                 body = page()
@@ -160,6 +179,9 @@ def make_handler(app: App):
                 pass
 
         def do_POST(self):
+            if why := self._same_origin(post=True):
+                self._json({"error": why}, HTTPStatus.FORBIDDEN)
+                return
             n = int(self.headers.get("Content-Length") or 0)
             if n > MAX_BODY:
                 self._json({"error": "요청이 너무 큼"}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
