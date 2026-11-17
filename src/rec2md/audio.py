@@ -44,6 +44,37 @@ def probe_duration(path: Path) -> float:
     return float(json.loads(out)["format"]["duration"])
 
 
+# 브라우저 <audio>가 재생하는 코덱(Chrome·Safari·Firefox 공통에 가까운 것만). 녹음기 중에는 확장자는
+# .MP3인데 실제로는 MPEG-1 Layer II(mp2)로 쓰는 기기가 있어, 확장자만 보고는 재생 가능 여부를 알 수 없다.
+BROWSER_CODECS = {"mp3", "aac", "opus", "vorbis", "flac", "pcm_s16le", "pcm_u8", "pcm_f32le"}
+
+
+def probe_codec(path: Path) -> str | None:
+    """첫 번째 오디오 스트림의 코덱 이름(ffprobe codec_name). 못 읽으면 None."""
+    try:
+        out = subprocess.run(
+            [_require("ffprobe"), "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=codec_name", "-of", "json", str(path)],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        streams = json.loads(out).get("streams") or []
+        return streams[0].get("codec_name") if streams else None
+    except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
+        return None
+
+
+def to_mp3(src: Path, dst: Path) -> Path:
+    """브라우저 재생용 mp3 사본(첫 오디오 스트림, 96kbps)."""
+    tmp = dst.with_name(dst.name + ".part")
+    subprocess.run(
+        [_require("ffmpeg"), "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+         "-i", str(src), "-map", "0:a:0", "-vn", "-c:a", "libmp3lame", "-b:a", "96k", "-f", "mp3", str(tmp)],
+        check=True,
+    )
+    tmp.replace(dst)
+    return dst
+
+
 def write_wav(path: Path, data) -> Path:
     """float32 배열(-1〜1) → 16bit mono wav (load_wav의 반대)."""
     import wave
