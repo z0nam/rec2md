@@ -252,12 +252,19 @@ class Job:
                 raise Busy("이미 요약을 만드는 중")
             if why := self.unavailable():
                 raise SummarizeError(why)
+            # 잠금을 잡기 전에 입력을 만든다: 여기서 터져도 잠금·상태가 남지 않게
+            prompt, fp = build_prompt(t, title), fingerprint(t)
             if not self.lock.acquire():
                 raise Busy("다른 화면에서 같은 녹취의 요약을 만드는 중")
+            prev = (self.state, self.error, self.started, self.finished)
             self.state, self.error, self.started, self.finished = "running", "", time.time(), 0.0
-        prompt, fp = build_prompt(t, title), fingerprint(t)
-        self._thread = threading.Thread(target=self._work, args=(prompt, fp), daemon=True)
-        self._thread.start()
+            try:
+                self._thread = threading.Thread(target=self._work, args=(prompt, fp), daemon=True)
+                self._thread.start()
+            except BaseException:
+                self.lock.release()
+                self.state, self.error, self.started, self.finished = prev
+                raise
 
     def _work(self, prompt: str, fp: str) -> None:
         import time

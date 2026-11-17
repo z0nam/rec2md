@@ -273,3 +273,66 @@ def test_api_summarize_missing_command(seg_file):
 def test_print_guide(capsys):
     cmd_review.main(["--print-guide"])
     assert capsys.readouterr().out == summarize.GUIDE
+
+
+def test_job_start_failure_releases_lock_and_state(seg_file, fake, monkeypatch):
+    """입력 만들기에서 터져도 잠금이 남거나 running에 머물지 않는다."""
+    job = summarize.Job(seg_file, "meet", fake())
+    t = Session(seg_file).current
+
+    def boom(*a, **k):
+        raise RuntimeError("프롬프트 실패")
+    monkeypatch.setattr(summarize, "build_prompt", boom)
+    with pytest.raises(RuntimeError, match="프롬프트 실패"):
+        job.start(t, "meet")
+    assert job.status()["state"] == "idle" and job.lock._fd is None
+    assert summarize.Lock(seg_file, "meet").acquire() is True   # 다른 창도 잡을 수 있다
+
+    monkeypatch.undo()
+    import threading as th
+
+    def no_thread(*a, **k):
+        raise RuntimeError("스레드 실패")
+    monkeypatch.setattr(th.Thread, "start", no_thread)
+    other = summarize.Job(seg_file.with_name("other.segments.json"), "other", fake())
+    with pytest.raises(RuntimeError, match="스레드 실패"):
+        other.start(t, "other")
+    assert other.status()["state"] == "idle" and other.lock._fd is None
+
+
+def _raw(base, method, path, headers, body=b"{}"):
+    import http.client
+    from urllib.parse import urlparse
+
+    u = urlparse(base)
+    c = http.client.HTTPConnection(u.hostname, u.port, timeout=10)
+    c.putrequest(method, path, skip_host=True)
+    for k, v in headers.items():
+        c.putheader(k, v)
+    if method == "POST":
+        c.putheader("Content-Length", str(len(body)))
+    c.endheaders(body if method == "POST" else None)
+    r = c.getresponse()
+    out = r.status, r.read()
+    c.close()
+    return out
+
+
+def test_cross_origin_requests_refused(seg_file, fake):
+    app, httpd, base = _server(seg_file, fake())
+    host = base.split("//", 1)[1]
+    ok = {"Host": host, "Content-Type": "application/json"}
+    try:
+        # 다른 웹페이지의 단순 요청(text/plain, 폼): 프리플라이트 없이 오므로 서버가 막아야 한다
+        assert _raw(base, "POST", "/api/summarize", {"Host": host, "Content-Type": "text/plain"})[0] == 403
+        assert _raw(base, "POST", "/api/edit", {**ok, "Origin": "https://evil.example"})[0] == 403
+        assert _raw(base, "POST", "/api/memo", {**ok, "Host": "evil.example:80"})[0] == 403      # DNS 리바인딩
+        assert _raw(base, "GET", "/api/copy", {"Host": "evil.example"})[0] == 403
+        assert app.job.status()["state"] == "idle"                                              # 아무것도 안 돌았다
+        # 화면 자신의 요청(같은 출처 fetch)은 그대로
+        assert _raw(base, "GET", "/api/state", {"Host": host})[0] == 200
+        assert _raw(base, "POST", "/api/undo", {**ok, "Origin": f"http://{host}"})[0] == 200
+        assert _raw(base, "GET", "/", {"Host": "localhost:" + host.split(":")[1]})[0] == 200
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
