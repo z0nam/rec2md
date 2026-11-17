@@ -81,6 +81,14 @@ class App:
         return st
 
 
+LOOPBACK = re.compile(r"(127\.0\.0\.1|localhost|\[::1\])(:\d+)?")
+
+
+def loopback(hostport: str) -> bool:
+    """'127.0.0.1:9000', 'localhost', '[::1]:8080' → True. 포트는 숫자이기만 하면 무엇이든."""
+    return LOOPBACK.fullmatch(hostport.strip().lower()) is not None
+
+
 def make_handler(app: App):
     class Handler(BaseHTTPRequestHandler):
         server_version = "rec2md-review"
@@ -99,15 +107,15 @@ def make_handler(app: App):
 
         def _same_origin(self, post: bool) -> str | None:
             """다른 웹페이지가 이 서버를 부르지 못하게 한다. 문제가 있으면 거절 이유, 괜찮으면 None.
-            - Host: 127.0.0.1/localhost:<이 포트>만(DNS 리바인딩으로 남의 도메인이 이 서버를 가리키는 것 차단)
-            - Origin: 있으면 같은 출처만
-            - POST는 Content-Type: application/json만(폼·text/plain 단순 요청은 프리플라이트 없이 오므로 막는다)"""
-            port = self.server.server_address[1]
-            allowed = {f"127.0.0.1:{port}", f"localhost:{port}"}
-            if (self.headers.get("Host") or "").lower() not in allowed:
+            - Host: 호스트 이름이 127.0.0.1·localhost·[::1]일 때만(DNS 리바인딩으로 남의 도메인이 이 서버를
+              가리키는 것 차단). 포트는 보지 않는다: `ssh -L 9000:127.0.0.1:<포트>`로 다른 머신에서 열면 포트가 바뀐다
+            - Origin: 있으면 같은 기준(http://<위 호스트>[:포트])
+            - POST는 Content-Type: application/json만(폼·text/plain 단순 요청은 프리플라이트 없이 오므로 막는다.
+              JSON 요청은 프리플라이트가 붙고 이 서버는 CORS를 허락하지 않으므로 다른 출처에서는 못 보낸다)"""
+            if not loopback(self.headers.get("Host") or ""):
                 return "Host가 이 서버가 아님"
             origin = self.headers.get("Origin")
-            if origin is not None and origin.lower() not in {f"http://{h}" for h in allowed}:
+            if origin is not None and not (origin.lower().startswith("http://") and loopback(origin[7:])):
                 return "다른 출처의 요청"
             if post and (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/json":
                 return "Content-Type은 application/json만"
