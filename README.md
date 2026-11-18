@@ -202,6 +202,7 @@ rec2md notes meeting.segments.json 메모.docx [--series 정례회의] [--to-ser
 
 ```sh
 rec2md review meeting.segments.json [--audio meeting.m4a] [--series 정례회의]   # 브라우저가 열린다. Ctrl-C로 끝냄
+rec2md review meeting.segments.json --at 01:46:47 [--play]          # 그 시각의 문장으로 바로 연다(주소 #t=초로도)
 rec2md review meeting.segments.json --summarize-cmd "codex exec"  # 요약 버튼에 쓸 명령 바꾸기(기본 claude -p)
 rec2md review --queue meeting.cases.json                       # 판정 모드
 ```

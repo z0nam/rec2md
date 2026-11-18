@@ -443,3 +443,69 @@ def test_playable_audio_transcodes_mp2_named_mp3(tmp_path):
     other.parent.mkdir()
     shutil.copy2(src, other)
     assert cmd_review.playable_audio(other, cache) != out
+
+
+# ---- --at: 시작 시각으로 바로 가기 (#57) ----
+
+@pytest.mark.parametrize("text, sec", [
+    ("01:46:47", 6407.0), ("1:46:47", 6407.0), ("46:47", 2807.0), ("6407", 6407.0), ("12.5", 12.5),
+    ("00:00:03.5", 3.5), ("0", 0.0),
+])
+def test_parse_at(text, sec):
+    assert cmd_review.parse_at(text) == sec
+
+
+@pytest.mark.parametrize("text", ["", "1:2:3:4", "aa:bb", "10:75", "-3", "1::2", "1:60:00"])
+def test_parse_at_rejects(text):
+    with pytest.raises(ValueError):
+        cmd_review.parse_at(text)
+
+
+def test_start_url():
+    base = "http://127.0.0.1:9000/"
+    assert cmd_review.start_url(base, None, False) == base
+    assert cmd_review.start_url(base, 6407.0, False) == base + "#t=6407"
+    assert cmd_review.start_url(base, 12.5, True) == base + "#t=12.5&play=1"
+    assert cmd_review.start_url(base, None, True) == base + "#t=0&play=1"
+
+
+class _FakeHttpd:
+    server_address = ("127.0.0.1", 9123)
+
+    def serve_forever(self):
+        raise KeyboardInterrupt
+
+    def server_close(self):
+        pass
+
+
+def _run_main(monkeypatch, capsys, argv):
+    monkeypatch.setattr(cmd_review, "serve", lambda app, port=0: _FakeHttpd())
+    cmd_review.main(argv)
+    return capsys.readouterr().err
+
+
+def test_cli_at_logs_jump_url(monkeypatch, capsys, seg_file):
+    err = _run_main(monkeypatch, capsys, [str(seg_file), "--no-open", "--at", "00:25", "--play"])
+    assert "http://127.0.0.1:9123/#t=25&play=1" in err
+
+
+def test_cli_at_out_of_range_opens_at_start(monkeypatch, capsys, seg_file):
+    err = _run_main(monkeypatch, capsys, [str(seg_file), "--no-open", "--at", "01:00:00"])   # 녹음은 60초
+    assert "넘음" in err and "http://127.0.0.1:9123/ " in err
+
+
+def test_cli_at_bad_format(seg_file):
+    with pytest.raises(SystemExit, match="형식"):
+        cmd_review.main([str(seg_file), "--no-open", "--at", "1시간"])
+
+
+def test_cli_at_not_for_queue(cases_file):
+    with pytest.raises(SystemExit, match="녹취록 검토에서만"):
+        cmd_review.main(["--queue", str(cases_file), "--no-open", "--at", "10"])
+
+
+def test_page_handles_hash_jump(server):
+    base, _ = server
+    page = get(base + "/")[2].decode()
+    assert 'addEventListener("hashchange", jumpTo)' in page   # 열린 화면에서 주소만 바꿔도 이동
