@@ -603,7 +603,9 @@ let sumHas = false, sumPoll = null, staleTimer = null;
 function showSummary(sm) {
   sumHas = !!sm;
   if (sm) {
-    const tag = sm.stale ? ' <span class="stale" title="요약을 만든 뒤 화자·문장을 고쳤다. 다시 만들면 반영된다">요약이 편집보다 오래됨</span>' : "";
+    let tag = sm.stale ? ' <span class="stale" title="요약을 만든 뒤 화자·문장을 고쳤다. 다시 만들면 반영된다">요약이 편집보다 오래됨</span>' : "";
+    if (sm.stale && sm.changes)   // 손으로 쓴 녹취록: 다시 만들지 않고 바뀐 곳만 고치게 안내
+      tag += ` <span class="stale" title="에이전트에게 이 명령으로 바뀐 곳만 확인해 그 문단만 고치게 하면 된다">바뀐 곳 ${sm.changes.count}건 — <code>${esc(sm.changes.cmd)}</code></span>`;
     $("psum").innerHTML = `<div class="mstat">${esc(sm.name)} (읽기 전용)${tag}</div>` + mdToHtml(sm.text);
   } else {
     $("psum").innerHTML = '<div class="mstat">요약 없음 — "요약 만들기"를 누르거나, 같은 폴더에 &lt;이름&gt;.요약.md 또는 &lt;이름&gt;.녹취록.md를 두면 보임</div>';

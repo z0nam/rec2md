@@ -188,7 +188,10 @@ def test_handwritten_summary_stale_by_mtime(seg_file):
     assert s.panel()["summary"]["stale"] is False
     os.utime(hand, (time.time() - 100, time.time() - 100))
     s.add({"op": "set_text", "seg": 1, "from": "문장1", "to": "고침"})
-    assert s.panel()["summary"] == {"name": "meet.녹취록.md", "text": "# 요약", "generated": False, "stale": True}
+    sm = s.panel()["summary"]
+    assert {k: sm[k] for k in ("name", "text", "generated", "stale")} == \
+        {"name": "meet.녹취록.md", "text": "# 요약", "generated": False, "stale": True}
+    assert sm["changes"]["count"] == 1  # 손으로 쓴 녹취록엔 바뀐 곳 수와 rec2md changes 안내(#56)
     assert hand.read_text(encoding="utf-8") == "# 요약"
 
 

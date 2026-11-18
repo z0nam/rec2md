@@ -263,6 +263,8 @@ class Session:
         if p:
             info, text = split_mark(p.read_text(encoding="utf-8"))
             summary = {"name": p.name, "text": text, "generated": bool(info), "stale": self.summary_stale(p, info)}
+            if summary["stale"] and not info:  # 손으로 쓴 녹취록·요약: 고칠 곳을 `rec2md changes`로 안내
+                summary["changes"] = self.changes_since(p)
         return {"summary": summary, "memo": self.memo(), "memo_name": self.memo_path.name}
 
     def summary_stale(self, p: Path, info: dict) -> bool:
@@ -270,6 +272,14 @@ class Session:
         if info.get("segments"):
             return info["segments"] != fingerprint(self.current)
         return self.edits_path.is_file() and self.edits_path.stat().st_mtime > p.stat().st_mtime
+
+    def changes_since(self, p: Path) -> dict:
+        """파일 p를 쓴 뒤 바뀐 곳 수와, 그 목록을 보는 명령."""
+        from .changes import changes, since_of
+        n = changes(self.seg, since_of(p), update_seen=False, with_memo=False).count()
+        arg = f'"{self.seg}"' if " " in str(self.seg) else str(self.seg)
+        cmd = f"rec2md changes {arg}" + ("" if p.name.endswith(".녹취록.md") else f' --since "{p}"')
+        return {"count": n, "cmd": cmd}
 
     def save_memo(self, text: str, base: str | list[str]) -> str:
         """base는 화면이 마지막으로 읽거나 저장한 메모. 그사이 파일이 바뀌었으면 덮어쓰지 않는다.

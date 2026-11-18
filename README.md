@@ -69,6 +69,7 @@ uv tool install --editable '.[diarize,render,export,office]'
 | `rec2md ingest <녹음기 폴더> <보관 폴더>` | 녹음기의 새 녹음만 지문(크기+sha1)으로 골라 복사, `--batch`로 이어서 전사, `--move-processed`로 끝난 것만 녹음기 안에서 옮김 | 동작 |
 | `rec2md <파일> --remote studio` | Windows 등에서 ssh로 맥에 전사를 맡기고 결과를 받아 옴 (`batch`도 됨), `rec2md remote ...`로 job 관리 | 동작 |
 | `rec2md review <segments.json>` | 문장 클릭 재생 + 화자·문장 고치기, 복사, 요약·메모 (이 맥에서만 열리는 웹 화면) | 동작 |
+| `rec2md changes <segments.json>` | review로 고친 곳(문장·화자·메모)을 녹취록.md 수정 뒤 것만 뽑기 → 에이전트가 그 문단만 고침 | 동작 |
 | `rec2md review --queue <cases.json>` | 사례를 하나씩 듣고 판정 → `answers.json` (평가 정답) | 동작 |
 
 ### 전사
