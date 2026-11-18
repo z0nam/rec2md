@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .render import fmt_ts
-from .review import apply_edits, side_file
+from .review import apply_edits, same, side_file
 from .segments import Transcript
 from .speakers import display_name
 
@@ -82,6 +82,24 @@ def _edits(seg: Path) -> list[dict]:
     return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else []
 
 
+def _history(seg: Path, edits: list[dict]) -> list[dict]:
+    """편집·되돌리기 기록. 없으면(예전 검토) 지금 로그를 기록으로 본다 — 그때 되돌린 것은 알 수 없다."""
+    p = side_file(seg, stem_of(seg), ".edits.history.json")
+    return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else list(edits)
+
+
+def replay(history: list[dict]) -> list[dict]:
+    """기록 → 그 시점의 편집 로그(되돌리기는 마지막 편집을 뺀다)."""
+    log: list[dict] = []
+    for e in history:
+        if e.get("op") == "undo":
+            if log:
+                log.pop()
+        else:
+            log.append(e)
+    return log
+
+
 def split_at(edits: list[dict], since: datetime | None) -> int:
     """기준 시점까지 적용된 편집 수. 로그는 덧붙이기만 하므로 앞부분이다. 시각 불명이 나오면 거기서 끊는다."""
     if since is None:
@@ -98,10 +116,11 @@ def split_at(edits: list[dict], since: datetime | None) -> int:
 def diff_transcripts(before: Transcript, after: Transcript) -> tuple[list[dict], list[dict]]:
     """세그먼트별 비교 → (문장 변경 목록, 화자 변경 묶음). 편집은 세그먼트를 늘리거나 줄이지 않는다."""
     bn, an = before.meta.get("speaker_names") or {}, after.meta.get("speaker_names") or {}
-    texts, groups = [], {}
-    left = {display_name(a.speaker, an) for a in after.segments}  # 바뀐 뒤에도 남아 있는 이름
+    texts, groups, uses, moved = [], {}, {}, {}
     for i, (b, a) in enumerate(zip(before.segments, after.segments)):
         sb, sa = display_name(b.speaker, bn), display_name(a.speaker, an)
+        uses[sb] = uses.get(sb, 0) + 1
+        moved[(sb, sa)] = moved.get((sb, sa), 0) + 1  # 문장도 바뀐 구간까지 센다
         if b.text != a.text:
             texts.append({"seg": i, "start": a.start, "end": a.end, "ts": fmt_ts(a.start),
                           "speaker_before": sb, "speaker_after": sa, "text_before": b.text, "text_after": a.text})
@@ -111,7 +130,9 @@ def diff_transcripts(before: Transcript, after: Transcript) -> tuple[list[dict],
     speakers = []
     for g in sorted(groups.values(), key=lambda g: g["first"]):
         n = len(g["segs"])
-        speakers.append({"from": g["from"], "to": g["to"], "n": n, "all": g["from"] not in left,
+        # "전체"는 전 이름의 모든 구간이 이 한 이름으로 갔을 때만. 여러 이름으로 나뉘었으면 부분으로 보인다
+        speakers.append({"from": g["from"], "to": g["to"], "n": n,
+                         "all": moved[(g["from"], g["to"])] == uses[g["from"]],
                          "first_ts": fmt_ts(g["first"]),
                          "segs": g["segs"]})
     return texts, speakers
@@ -139,18 +160,18 @@ def memo_change(seg: Path, since: datetime | None, update_seen: bool = True) -> 
 def changes(seg: Path, since: datetime | None, update_seen: bool = True, with_memo: bool = True) -> Changes:
     stem = stem_of(seg)
     edits = _edits(seg)
-    c = Changes(since=since, edits_total=len(edits))
+    history = _history(seg, edits)
+    c = Changes(since=since, edits_total=len(history))
     orig = side_file(seg, stem, ".segments.orig.json")
-    if edits and orig.is_file():
+    if history and orig.is_file():
         base = Transcript.from_json(orig)
-        k = split_at(edits, since)
-        after_edits = edits[k:]
-        c.edits_after = len(after_edits)
-        c.unknown_time = sum(1 for e in after_edits if _at(e) is None)
-        before, after = apply_edits(base, edits[:k]), apply_edits(base, edits)
+        k = split_at(history, since)
+        after_hist = history[k:]
+        c.edits_after = len(after_hist)
+        c.unknown_time = sum(1 for e in after_hist if _at(e) is None)
+        before, after = apply_edits(base, replay(history[:k])), apply_edits(base, edits)
         c.texts, c.speakers = diff_transcripts(before, after)
-        now = Transcript.from_json(seg)
-        if [(s.text, s.speaker) for s in now.segments] != [(s.text, s.speaker) for s in after.segments]:
+        if not same(Transcript.from_json(seg), after):  # 이름(meta.speaker_names)만 바뀐 것도 잡는다
             c.notice = ("segments.json이 편집 로그 밖에서 바뀌었음(rec2md voices name 등). 여기 결과는 편집 로그 기준이다. "
                         "rec2md review로 한 번 열면 지금 파일을 새 원본으로 삼는다")
     if with_memo:

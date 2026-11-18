@@ -106,6 +106,7 @@ def test_edits_without_time_are_all_included(seg):
     for e in log:
         del e["at"]
     p.write_text(json.dumps(log, ensure_ascii=False), encoding="utf-8")
+    seg.with_name("meet.edits.history.json").unlink()  # 기록 파일도 없던 예전 검토
     c = changes(seg, at(T1))
     assert c.unknown_time == 2 and [t["seg"] for t in c.texts] == [0, 1]
     assert "시각 불명 2건" in render_text(c, seg)
@@ -147,3 +148,41 @@ def test_panel_shows_change_count_for_handwritten_transcript(seg):
     sm = s.panel()["summary"]
     assert sm["stale"] and sm["changes"]["count"] == 2
     assert sm["changes"]["cmd"] == f"rec2md changes {seg}"
+
+
+def test_undo_after_since_is_reported(seg):
+    """녹취록에 반영한 교정을 나중에 되돌리면 그것도 바뀐 곳이다(되돌리기 기록으로 기준 시점 상태를 되살림)."""
+    s = Session(seg)
+    s.add(text(0, "문장0", "반영된 교정", T0))
+    s.undo()  # 지금 시각(기준 T1 이후)
+    c = changes(seg, at(T1))
+    assert [(t["text_before"], t["text_after"]) for t in c.texts] == [("반영된 교정", "문장0")]
+
+
+def test_history_seeded_from_old_log(seg):
+    """기록 파일이 없던 예전 검토의 로그도 첫 기록 때 앞에 깔린다."""
+    s = Session(seg)
+    s.add(text(0, "문장0", "옛 교정", T0))
+    seg.with_name("meet.edits.history.json").unlink()
+    s.add(text(1, "문장1", "새 교정", T2))
+    h = json.loads(seg.with_name("meet.edits.history.json").read_text(encoding="utf-8"))
+    assert [e["to"] for e in h] == ["옛 교정", "새 교정"]
+    assert [t["seg"] for t in changes(seg, at(T1)).texts] == [1]
+
+
+def test_external_name_change_warns(seg):
+    """편집 로그 밖에서 이름(meta.speaker_names)만 바뀌어도 알린다."""
+    Session(seg).add(text(0, "문장0", "고침", T0))
+    t = Transcript.from_json(seg)
+    t.meta["speaker_names"] = {"화자2": {"name": "홍길동", "source": "user"}}
+    t.to_json(seg)
+    assert changes(seg, at(T1)).notice
+
+
+def test_split_speaker_is_not_all(seg):
+    """한 화자를 두 이름으로 나누면 어느 쪽도 "전체"가 아니다."""
+    s = Session(seg)
+    s.add({"op": "set_speaker", "scope": "one", "seg": 0, "from": "화자1", "to": {"name": "홍길동"}, "at": T2})
+    s.add({"op": "set_speaker", "scope": "after", "seg": 2, "from": "화자1", "to": {"name": "김철수"}, "at": T2})
+    gs = changes(seg, at(T1)).speakers
+    assert [(g["to"], g["n"], g["all"]) for g in gs] == [("홍길동", 1, False), ("김철수", 2, False)]
