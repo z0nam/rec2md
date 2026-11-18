@@ -4,6 +4,8 @@
 `apply_edits(원본, 로그)`는 순수 함수라 같은 로그를 다시 적용하면 같은 결과가 나온다. 화면은 편집 한 건마다
 서버에 보내고, 서버는 로그에 덧붙인 뒤 원본에서 다시 적용해 segments.json·raw.md를 고쳐 쓴다.
 되돌리기는 로그의 마지막 연산을 빼고 다시 적용하는 것이다.
+`<이름>.edits.history.json`은 편집과 되돌리기(`{"op": "undo", "at": …}`)를 시각과 함께 덧붙이기만 하는 기록이다.
+`rec2md changes`가 기준 시점의 녹취를 되살리는 데 쓴다(되돌린 교정도 바뀐 곳으로 보이게).
 
 연산
 - `{"op": "set_speaker", "scope": "one"|"after"|"all", "seg": i, "from": "화자3", "to": "화자1" | {"name": "홍길동"}}`
@@ -169,6 +171,7 @@ class Session:
         self.stem = stem
         self.orig = seg_path.with_name(f"{stem}.segments.orig.json")
         self.edits_path = seg_path.with_name(f"{stem}.edits.json")
+        self.history_path = seg_path.with_name(f"{stem}.edits.history.json")  # 되돌리기까지 담은 덧붙이기 전용 기록
         self.raw = seg_path.with_name(f"{stem}.raw.md")
         self.edits: list[dict] = (json.loads(self.edits_path.read_text(encoding="utf-8"))
                                   if self.edits_path.is_file() else [])
@@ -188,6 +191,8 @@ class Session:
         shutil.move(self.orig, self.seg.with_name(f"{self.stem}.{ts}.segments.orig.json"))
         if self.edits_path.is_file():
             shutil.move(self.edits_path, self.seg.with_name(f"{self.stem}.{ts}.edits.json"))
+        if self.history_path.is_file():
+            shutil.move(self.history_path, self.seg.with_name(f"{self.stem}.{ts}.edits.history.json"))
         shutil.copy2(self.seg, self.orig)
         self.edits = []
         self.notice = (f"지난 검토 뒤 segments.json이 바뀌어 지금 파일을 새 원본으로 삼음 "
@@ -210,12 +215,22 @@ class Session:
         self.edits_path.write_text(json.dumps(self.edits, ensure_ascii=False, indent=1), encoding="utf-8")
         self._disk = self.seg.read_bytes()
 
+    def _log(self, entry: dict) -> None:
+        """`rec2md changes`가 기준 시점의 녹취를 되살릴 수 있게 편집·되돌리기를 시각과 함께 덧붙인다.
+        edits.json은 되돌리기에서 항목을 빼므로 그것만으로는 "되돌린 교정"을 알 수 없다."""
+        # 기록이 없던 예전 검토면 지금 로그를 앞에 깐다(그 항목들의 at은 있으면 그대로, 없으면 시각 불명)
+        h = (json.loads(self.history_path.read_text(encoding="utf-8")) if self.history_path.is_file()
+             else list(self.edits))
+        h.append(entry)
+        self.history_path.write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding="utf-8")
+
     def add(self, edit: dict) -> None:
         self._check_disk()
         edit = {**edit, "at": edit.get("at") or now()}
         nxt = apply_edits(self.current, [edit])  # 잘못된 연산이면 로그에 넣기 전에 ValueError
         if same(nxt, self.current):  # 바뀌는 게 없으면 로그에 남기지 않는다(되돌리기가 헛돌지 않게)
             return
+        self._log(edit)
         self.edits.append(edit)
         self._write()
 
@@ -223,6 +238,7 @@ class Session:
         self._check_disk()
         if not self.edits:
             return None
+        self._log({"op": "undo", "at": now()})
         e = self.edits.pop()
         self._write()
         return e
@@ -263,6 +279,8 @@ class Session:
         if p:
             info, text = split_mark(p.read_text(encoding="utf-8"))
             summary = {"name": p.name, "text": text, "generated": bool(info), "stale": self.summary_stale(p, info)}
+            if summary["stale"] and not info:  # 손으로 쓴 녹취록·요약: 고칠 곳을 `rec2md changes`로 안내
+                summary["changes"] = self.changes_since(p)
         return {"summary": summary, "memo": self.memo(), "memo_name": self.memo_path.name}
 
     def summary_stale(self, p: Path, info: dict) -> bool:
@@ -270,6 +288,14 @@ class Session:
         if info.get("segments"):
             return info["segments"] != fingerprint(self.current)
         return self.edits_path.is_file() and self.edits_path.stat().st_mtime > p.stat().st_mtime
+
+    def changes_since(self, p: Path) -> dict:
+        """파일 p를 쓴 뒤 바뀐 곳 수와, 그 목록을 보는 명령."""
+        from .changes import changes, since_of
+        n = changes(self.seg, since_of(p), update_seen=False, with_memo=False).count()
+        arg = f'"{self.seg}"' if " " in str(self.seg) else str(self.seg)
+        cmd = f"rec2md changes {arg}" + ("" if p.name.endswith(".녹취록.md") else f' --since "{p}"')
+        return {"count": n, "cmd": cmd}
 
     def save_memo(self, text: str, base: str | list[str]) -> str:
         """base는 화면이 마지막으로 읽거나 저장한 메모. 그사이 파일이 바뀌었으면 덮어쓰지 않는다.
