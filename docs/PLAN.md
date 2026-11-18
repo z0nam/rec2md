@@ -159,7 +159,7 @@ rec2md <audio> [--engine local|rtzr|clova]  # 기본 local [--call] [--speakers 
 | 클로바식 녹취록 내보내기 | 진행 | `rec2md render <segments.json> --kind transcript --format txt,md,html` | #8 (이슈 #6) |
 | 화자 목소리 DB·자동 태깅 | 진행 | `rec2md voices enroll\|match\|list\|rename\|forget`, `meta.speaker_names`(`tentative`, `same_as`, `source: "user"`) | worker-1 |
 | 폴더 일괄 처리 | 진행 | `rec2md batch <dir> --dry-run`, 상태 파일로 이어서 | 이슈 #10 |
-| 검토 화면 | 동작 | `rec2md review <segments.json>`: 클릭 재생, 화자 변경 3범위(영향 미리보기, 훑어보기, 되돌리기), 문장 편집(`set_text`), 클로바 txt 복사, 오른쪽 패널(요약 읽기·"요약 만들기"·메모 저장), 키워드 칩, `--queue` 판정 모드 | 이슈 #12 (worker-3) |
+| 검토 화면 | 동작 | `rec2md review <segments.json>`: 클릭 재생, 화자 변경 3범위(영향 미리보기, 훑어보기, 되돌리기), 문장 편집(`set_text`), 클로바 txt 복사, 오른쪽 패널(요약 읽기·"요약 만들기"·메모 저장), 키워드 칩, `--at` 시각 점프(주소 `#t=`, #57), `--queue` 판정 모드 | 이슈 #12 (worker-3) |
 
 - 검토 화면 "요약 만들기"(2026-11-17, `summarize.py`): 요약은 에이전트 CLI를 서브프로세스로 돌려 만든다(기본 `claude -p`, 구독 로그인 사용, API 키 받지 않음).
   - 계약은 "프롬프트 stdin → 요약 md stdout" 하나다. `--summarize-cmd` / `REC2MD_SUMMARIZE_CMD`로 `codex exec`나 로컬 LLM 래퍼로 바꾼다. 로컬 모델 구현은 아직 없다.

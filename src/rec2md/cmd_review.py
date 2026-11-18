@@ -1,6 +1,7 @@
 """rec2md review — 녹취록 검토 화면(클릭 재생, 화자 지정)과 판정 모드.
 
   rec2md review <이름>.segments.json [--audio <원본>] [--series <이름>] [--summarize-cmd "claude -p"] [--port 0] [--no-open]
+  rec2md review <이름>.segments.json --at 01:46:47 [--play]   # 그 시각의 문장으로 바로 연다
   rec2md review --queue <이름>.cases.json [--audio <원본>]
   rec2md review --print-guide        # 요약 지침 전문(summarize.GUIDE)
 
@@ -267,6 +268,31 @@ def playable_audio(audio: Path, cache_dir: Path | None = None) -> Path:
     return dst
 
 
+def parse_at(text: str) -> float:
+    """`--at` 값: HH:MM:SS, MM:SS, 초(소수 가능) → 초. 틀리면 ValueError."""
+    parts = text.strip().split(":")
+    if not 1 <= len(parts) <= 3 or any(not p.strip() for p in parts):
+        raise ValueError(f"시각 형식이 아님: {text!r} (HH:MM:SS, MM:SS, 초)")
+    try:
+        nums = [float(p) for p in parts]
+    except ValueError:
+        raise ValueError(f"시각 형식이 아님: {text!r} (HH:MM:SS, MM:SS, 초)") from None
+    if any(n < 0 for n in nums) or any(n >= 60 for n in nums[1:]):
+        raise ValueError(f"시각 형식이 아님: {text!r} (분·초는 0〜59)")
+    sec = 0.0
+    for n in nums:
+        sec = sec * 60 + n
+    return sec
+
+
+def start_url(base: str, at: float | None, play: bool) -> str:
+    """검토 화면 주소. 시작 시각은 `#t=<초>`(+`&play=1`)로 붙인다. 열린 화면에서도 주소만 바꾸면 그리로 간다."""
+    if at is None and not play:
+        return base
+    frag = f"t={at or 0:g}" + ("&play=1" if play else "")
+    return f"{base}#{frag}"
+
+
 def serve(app: App, port: int = 0) -> ThreadingHTTPServer:
     return ThreadingHTTPServer(("127.0.0.1", port), make_handler(app))
 
@@ -281,6 +307,10 @@ def main(argv: list[str]) -> None:
                    help=f"요약 탭 '요약 만들기'에 쓸 명령. 프롬프트를 stdin으로 받아 md를 stdout으로 내는 것 "
                         f"(기본: ${summarize.ENV_CMD} 또는 '{summarize.DEFAULT_CMD}')")
     p.add_argument("--print-guide", action="store_true", help="요약 지침 전문을 출력하고 끝냄")
+    p.add_argument("--at", metavar="TIME",
+                   help="이 시각(HH:MM:SS, MM:SS, 초)의 문장을 하이라이트해 화면 가운데에 두고 연다. "
+                        "주소의 #t=<초>로도 같은 일을 한다")
+    p.add_argument("--play", action="store_true", help="--at 위치에서 바로 재생 (브라우저가 막으면 ▶로)")
     p.add_argument("--port", type=int, default=0, help="포트 (기본 0: 빈 포트)")
     p.add_argument("--no-open", action="store_true", help="브라우저를 열지 않음")
     args = p.parse_args(argv)
@@ -290,6 +320,12 @@ def main(argv: list[str]) -> None:
         return
     if bool(args.segments) == bool(args.queue):
         raise SystemExit("segments.json 하나 또는 --queue <cases.json> 중 하나만 줄 것")
+    if args.queue and (args.at or args.play):
+        raise SystemExit("--at·--play는 녹취록 검토에서만 쓴다 (판정 모드는 사례 순서대로)")
+    try:
+        at = parse_at(args.at) if args.at else None
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
     session = queue = None
     if args.queue:
         if not args.queue.is_file():
@@ -306,6 +342,10 @@ def main(argv: list[str]) -> None:
         if session.notice:
             log(session.notice)
         audio = args.audio or find_audio(args.segments.parent, session.current.source)
+        dur = session.current.duration or 0
+        if at is not None and dur and at > dur:
+            log(f"--at {args.at}이 녹음 길이({dur:.0f}초)를 넘음 — 맨 앞에서 연다")
+            at = None
     if audio is None:
         log("오디오를 찾지 못함 — 재생 없이 연다 (--audio로 지정)")
     elif not audio.is_file():
@@ -314,7 +354,7 @@ def main(argv: list[str]) -> None:
         audio = playable_audio(audio)
 
     httpd = serve(App(session, queue, audio, args.series, args.summarize_cmd), args.port)
-    url = f"http://127.0.0.1:{httpd.server_address[1]}/"
+    url = start_url(f"http://127.0.0.1:{httpd.server_address[1]}/", at, args.play)
     log(f"{url} (Ctrl-C로 끝냄)")
     if not args.no_open:
         webbrowser.open(url)

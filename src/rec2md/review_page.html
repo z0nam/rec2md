@@ -31,6 +31,9 @@
   main { max-width: 860px; margin: 0 auto; padding: 8px 20px 160px; }
   .seg { display: grid; grid-template-columns: 36px 1fr; gap: 4px 12px; padding: 10px 8px; border-radius: 10px; }
   .seg.cur { background: var(--hl); }
+  .seg.jump { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+  .play.waiting { animation: wait 1.2s ease-in-out infinite; }
+  @keyframes wait { 50% { box-shadow: 0 0 0 6px var(--hl); } }
   .seg.browse { outline: 2px solid var(--accent); outline-offset: -2px; }
   .av { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: #fff;
     font-size: 13px; font-weight: 600; margin-top: 2px; user-select: none; }
@@ -358,6 +361,65 @@ $("pill").onclick = () => {
   if (e) e.scrollIntoView({ block: "center", behavior: "smooth" });
   $("pill").classList.remove("on");
 };
+
+// ---------- 시각으로 바로 가기 (#t=<초>[&play=1], `rec2md review --at`) ----------
+function hashJump() {
+  const q = new URLSearchParams(location.hash.slice(1));
+  if (!q.has("t")) return null;
+  const raw = q.get("t").trim();   // 초(소수 가능) 또는 HH:MM:SS·MM:SS (CLI --at과 같은 형식)
+  const parts = raw.split(":");
+  const ok = raw && parts.length <= 3 && parts.every((x, k) => /^\d+(\.\d+)?$/.test(x) && (k === 0 || Number(x) < 60));
+  return ok ? { t: parts.reduce((a, x) => a * 60 + Number(x), 0), play: q.get("play") === "1" } : { bad: raw };
+}
+function jumpSeg(t) {
+  // t를 포함하는 세그먼트, 없으면(문장 사이 공백) 그 직후 세그먼트, 그것도 없으면 마지막
+  const segs = S.segments;
+  const i = segAt(t);
+  if (i >= 0 && t < segs[i].end) return i;
+  return i + 1 < segs.length ? i + 1 : segs.length - 1;
+}
+function whenReady(fn) {
+  if (!S.audio || audio.readyState >= 1) fn();
+  else audio.addEventListener("loadedmetadata", fn, { once: true });
+}
+function jumpTo() {
+  if (!S || S.mode !== "transcript" || !S.segments.length) return;
+  const j = hashJump();
+  if (!j) return;
+  const d = S.duration || 0;
+  $("play").classList.remove("waiting");
+  const old = segEl(curIdx);
+  if (old) old.classList.remove("cur");
+  document.querySelectorAll(".seg.jump").forEach((x) => x.classList.remove("jump"));
+  if (j.bad !== undefined || (d && j.t > d)) {
+    setStatus(j.bad !== undefined ? `시각 형식이 아님(${j.bad}) — 맨 앞에서 엶`
+                                  : `시각 ${fmt(j.t)}은 녹음 길이(${fmt(d)})를 넘어 맨 앞에서 엶`, true);
+    curIdx = -1;
+    window.scrollTo(0, 0);
+    if (S.audio) whenReady(() => { audio.pause(); audio.currentTime = 0; });
+    return;
+  }
+  const i = jumpSeg(j.t);
+  curIdx = i;
+  const e = segEl(i);
+  e.classList.add("cur", "jump");
+  autoScroll = true;
+  e.scrollIntoView({ block: "center" });
+  const start = S.segments[i].start;
+  if (!S.audio) { setStatus(`${fmt(start)} 문장으로 이동 (오디오 없음)`); return; }
+  whenReady(() => {
+    stopAt = null;
+    audio.currentTime = start;
+    if (!j.play) { setStatus(`${fmt(start)} 문장으로 이동 — ▶ 또는 Space로 재생`); return; }
+    audio.play().then(() => setStatus(`${fmt(start)}부터 재생`)).catch(() => {
+      // 사용자 조작 없이 연 탭은 브라우저가 자동 재생을 막는다. 위치는 맞춰 두고 기다린다
+      setStatus(`${fmt(start)}에서 재생 대기 — 브라우저가 자동 재생을 막음. ▶ 또는 Space를 누르세요`, true);
+      $("play").classList.add("waiting");
+    });
+  });
+}
+audio.addEventListener("play", () => $("play").classList.remove("waiting"));
+window.addEventListener("hashchange", jumpTo);
 
 function renderTranscript() {
   const main = $("main");
@@ -913,6 +975,7 @@ document.addEventListener("keydown", (ev) => {
     for (const b of ["edit", "copy", "panelbtn"]) $(b).hidden = false;
     $("layout").classList.add("has-panel");
     renderTranscript();
+    jumpTo();
     loadPanel().catch((e) => setStatus("요약·메모 불러오기 실패: " + e.message, true));
     api("/api/keywords").then((r) => { kws = r.keywords || []; renderChips(); applyKw(); }).catch(() => {});
   } else {
