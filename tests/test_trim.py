@@ -8,6 +8,13 @@ import pytest
 from rec2md import audio, cli, trim
 from rec2md.segments import Segment, Word
 
+@pytest.fixture(autouse=True)
+def _no_vad(monkeypatch):
+    """run_one 경로의 VAD 확인은 기본으로 끈다(HF_TOKEN이 있으면 실제 모델을 올리므로). 켜는 테스트는 따로 바꾼다."""
+    from rec2md import speechcheck
+    monkeypatch.setattr(speechcheck, "cut_checker", lambda wav: None)
+
+
 SPEECH, NOISE = -18.0, -52.0  # 360분 실측: 말소리 -10〜-25dB, 녹음기 "무음" -50〜-57dB
 
 
@@ -180,3 +187,48 @@ def test_trim_silence_records_skipped_reason(tmp_path):
     meta: dict = {}
     assert cli._trim_silence(src, tmp_path / "t.wav", meta) == (src, None)
     assert "trim" not in meta and meta["trim_skipped"]["restored"]
+
+
+def _distant_talk() -> np.ndarray:
+    """가까운 회의 30분 → 먼 사람이 6분 30초 이어 말함(6.5dB 조용) → 가까운 회의 20분. 1초 dB."""
+    rng = np.random.default_rng(5)
+    near = lambda n: -29.0 + rng.normal(0, 3, n)  # noqa: E731
+    return np.concatenate([near(1800), -35.5 + rng.normal(0, 1.5, 390), near(1200)]).astype(np.float32)
+
+
+def test_distant_speech_passes_contrast_but_vad_keeps_it():
+    """#58: 대비 확인만으로는 먼 말소리가 잘린다 → VAD가 말소리로 들으면 자르지 않고 speech에 남긴다."""
+    db = _distant_talk()
+    assert trim.plan(db).trims()  # 대비만 보면 자른다(재현)
+    asked = []
+    p = trim.plan(db, vad=lambda s, e: asked.append((s, e)) or 0.97)
+    assert not p.trims() and p.kept_sec == len(db)
+    assert len(asked) == 1 and p.speech == [(*asked[0], 0.97)]
+
+
+def test_vad_silence_or_unknown_still_cuts():
+    db = _distant_talk()
+    assert trim.plan(db, vad=lambda s, e: 0.0).trims()          # 진짜 무음
+    assert trim.plan(db, vad=lambda s, e: None).trims()         # 확인 못 함 → 대비만
+    assert trim.plan(db, vad=lambda s, e: trim.SPEECH_KEEP).speech  # 경계값은 남긴다
+
+
+def test_trim_silence_uses_vad_and_records_it(tmp_path, monkeypatch):
+    from rec2md import speechcheck
+    rng = np.random.default_rng(6)
+    noise = (rng.normal(0, 10 ** (NOISE / 20), 600 * audio.SAMPLE_RATE)).astype(np.float32)
+    src = audio.write_wav(tmp_path / "in.wav", np.concatenate([_tone(180, 0.2), noise, _tone(120, 0.2)]))
+    monkeypatch.setattr(speechcheck, "cut_checker", lambda wav: (lambda s, e: 0.8))
+    meta: dict = {}
+    assert cli._trim_silence(src, tmp_path / "t.wav", meta) == (src, None)
+    assert meta["trim_skipped"]["speech"][0][2] == 0.8 and meta["trim_skipped"]["restored"] == []
+
+
+def test_trim_silence_without_vad_logs_warning(tmp_path, capsys):
+    rng = np.random.default_rng(7)
+    noise = (rng.normal(0, 10 ** (NOISE / 20), 600 * audio.SAMPLE_RATE)).astype(np.float32)
+    src = audio.write_wav(tmp_path / "in.wav", np.concatenate([_tone(180, 0.2), noise, _tone(120, 0.2)]))
+    meta: dict = {}
+    out, m = cli._trim_silence(src, tmp_path / "t.wav", meta)
+    assert m is not None and meta["trim"]["speech"] == []
+    assert "VAD" in capsys.readouterr().err

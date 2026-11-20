@@ -113,3 +113,32 @@ def speech_ratio(path: Path, min_gap: float = trim.MIN_GAP, n: int = WINDOWS,
     if not total:  # 표본을 하나도 못 들었으면 0%가 아니라 추정 실패 → 보정 없이 둔다
         raise RuntimeError("말소리 확인에 쓸 표본을 하나도 읽지 못함")
     return sum(e - s for s, e in keep), min(1.0, speech / total)
+
+
+CUT_STEP = 60.0  # 잘라낼 구간 확인: 이 길이마다 30초 창 하나
+CUT_MAX = 10     # 구간 하나에 듣는 창 수 상한(1시간 무음도 창 10개, CPU 약 15초)
+
+
+def cut_checker(wav: np.ndarray):
+    """trim.plan(vad=…)에 넘길 확인 함수. 잘라낼 구간에 30초 창을 고르게 놓고 VAD 말소리 비율을 돌려준다.
+    VAD를 쓸 수 없으면 None(대비 확인만 한다)."""
+    try:
+        vad = _load_vad()
+    except Exception:
+        return None
+    if vad is None:
+        return None
+    import torch
+
+    def ratio(s: float, e: float) -> float | None:
+        speech = total = 0.0
+        for start, dur in windows([(s, e)], n=min(CUT_MAX, max(1, int((e - s) // CUT_STEP)))):
+            a = wav[int(start * SAMPLE_RATE):int((start + dur) * SAMPLE_RATE)]
+            if not a.size:
+                continue
+            ann = vad({"waveform": torch.from_numpy(np.ascontiguousarray(a)).unsqueeze(0), "sample_rate": SAMPLE_RATE})
+            speech += ann.get_timeline().support().duration()
+            total += len(a) / SAMPLE_RATE
+        return min(1.0, speech / total) if total else None
+
+    return ratio

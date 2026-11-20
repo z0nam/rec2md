@@ -15,6 +15,14 @@
   레벨이고, 임계값이 상한 -30dB에 걸린다. 그러면 -34dB 안팎으로 계속 말하는 33분 강의가 1분 30초만 남고 잘렸다.
   실측(2026-11-16): 녹음기 파일 7개의 잘라낸 구간은 남긴 구간보다 9.4〜31.7dB 조용했고, 그 강의는 0.5〜0.7dB였다.
   대비가 모자란 구간은 자르지 않고 `restored`로 남긴다.
+- 말소리 확인(`vad`, 있으면): 대비를 통과한 구간도 VAD로 표본을 들어 말소리 비율이 SPEECH_KEEP 이상이면 자르지 않는다.
+  마이크에서 먼 사람이 몇 분 이어 말하면 그 구간은 회의 중앙값보다 6dB 남짓 조용해 대비 확인을 통과한다.
+  실측(2026-11-20, #58): 2시간 회의에서 이렇게 잘린 6분 30초(대비 6.3dB)는 VAD 말소리 비율 1.0이었고, 전사에는
+  잘린 구간 앞뒤 조각만 남아 6〜8분 세그먼트가 0.6〜0.9자/초로 비었다(파일 중앙값 6.3). 대비 12.7dB로 잘리던 다른 녹음의
+  14분 30초도 VAD 0.89였고 Whisper로 들으니 3.9자/초 말소리였다. 녹음기를 안 끈 진짜 공백 7곳(4개 파일, 대비 10.1〜25.7dB)은
+  VAD 0.0〜0.2라 그대로 잘린다. 대비 확인으로 이미 살린 말소리 구간 4곳은 0.59〜0.99.
+  그래서 SPEECH_KEEP = 0.5(말소리 쪽 최저 0.59, 무음 쪽 최고 0.2).
+  VAD를 쓸 수 없으면(pyannote·HF_TOKEN 없음) 이 확인 없이 대비만 본다.
 """
 
 from __future__ import annotations
@@ -33,6 +41,7 @@ ACTIVE_FRAC = 0.10   # 창 안에서 임계값을 넘는 초의 비율
 PAD = 15.0           # 말소리 창 앞뒤로 남길 여유(초)
 FLOOR_PCT, MARGIN, T_MIN, T_MAX = 20, 15.0, -45.0, -30.0
 MIN_CONTRAST = 6.0   # 잘라낼 구간이 남길 구간보다 이만큼(dB, 중앙값끼리) 조용해야 자른다
+SPEECH_KEEP = 0.5    # 잘라낼 구간의 VAD 말소리 비율이 이 이상이면 자르지 않는다(근거는 PLAN·PR #58)
 
 
 def loudness_file(path, rate: int = 8000) -> np.ndarray:
@@ -77,6 +86,7 @@ class Plan:
     review: list[tuple[float, float]] = None  # 잘라냈지만 약한 소리가 있던 1분 창(원본 초)
     min_gap: float = MIN_GAP
     restored: list[tuple[float, float]] = None  # 무음 후보였지만 남긴 구간보다 충분히 조용하지 않아 남긴 곳(원본 초)
+    speech: list[tuple[float, float, float]] = None  # 대비는 통과했지만 VAD가 말소리로 들어 남긴 곳(원본 초, 비율)
 
     @property
     def kept_sec(self) -> float:
@@ -86,8 +96,10 @@ class Plan:
         return bool(self.cut)
 
 
-def plan(db: np.ndarray, min_gap: float = MIN_GAP) -> Plan:
-    """1초 단위 dBFS → 남길 구간과 잘라낼 구간."""
+def plan(db: np.ndarray, min_gap: float = MIN_GAP, vad=None) -> Plan:
+    """1초 단위 dBFS → 남길 구간과 잘라낼 구간.
+
+    `vad(start, end) -> 말소리 비율 | None`을 주면 자르기 직전에 구간마다 묻는다(None이면 확인 못 함 → 대비만 본다)."""
     dur = float(len(db))
     t = threshold(db)
     active = db > t
@@ -104,7 +116,7 @@ def plan(db: np.ndarray, min_gap: float = MIN_GAP) -> Plan:
         else:
             keep.append((s, e))
     if not keep:  # 말소리를 못 찾으면 자르지 않는다(판정을 믿지 않는 편이 안전)
-        return Plan([(0.0, dur)], [], dur, t, [], min_gap, [])
+        return Plan([(0.0, dur)], [], dur, t, [], min_gap, [], [])
     # 처음·끝의 짧은 무음은 남긴다 — 앞뒤도 min_gap 이상일 때만 자른다
     if keep[0][0] < min_gap:
         keep[0] = (0.0, keep[0][1])
@@ -114,10 +126,16 @@ def plan(db: np.ndarray, min_gap: float = MIN_GAP) -> Plan:
     # 대비 확인: 남길 구간보다 충분히 조용하지 않은 "무음"은 말소리일 수 있으니 자르지 않는다
     kept_db = float(np.median(db[_mask(keep, len(db))]))
     restored = [(s, e) for s, e in cut if kept_db - float(np.median(db[int(s):int(e)])) < MIN_CONTRAST]
-    if restored:
-        cut = [c for c in cut if c not in restored]
-        keep = _complement(cut, dur)
-    return Plan(keep, cut, dur, t, _review(active, cut), min_gap, restored)
+    cut = [c for c in cut if c not in restored]
+    voiced: list[tuple[float, float, float]] = []
+    if vad is not None:
+        for s, e in cut:
+            r = vad(s, e)
+            if r is not None and r >= SPEECH_KEEP:
+                voiced.append((s, e, round(float(r), 2)))
+        cut = [c for c in cut if not any(c == v[:2] for v in voiced)]
+    keep = _complement(cut, dur)
+    return Plan(keep, cut, dur, t, _review(active, cut), min_gap, restored, voiced)
 
 
 def _mask(spans: list[tuple[float, float]], n: int) -> np.ndarray:
@@ -199,4 +217,5 @@ def meta(p: Plan, m: OffsetMap) -> dict:
     return {"threshold_db": round(p.threshold, 1), "min_gap": p.min_gap, "kept_sec": round(p.kept_sec, 1),
             "cut": [[round(s, 1), round(e, 1)] for s, e in p.cut],
             "review": [[round(s, 1), round(e, 1)] for s, e in p.review or []],
-            "restored": [[round(s, 1), round(e, 1)] for s, e in p.restored or []], "offsets": m.table()}
+            "restored": [[round(s, 1), round(e, 1)] for s, e in p.restored or []],
+            "speech": [[round(s, 1), round(e, 1), r] for s, e, r in p.speech or []], "offsets": m.table()}
