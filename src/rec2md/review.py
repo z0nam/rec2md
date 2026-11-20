@@ -34,6 +34,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+from . import gaps
 from .render import render_raw
 from .segments import Transcript
 from .series import parse_glossary, series_root
@@ -258,6 +259,7 @@ class Session:
                           "user": is_user(names.get(lb))}
                          for lb in labels],
             "edits": len(self.edits),
+            "gaps": [{"start": g["start"], "end": g["end"], "note": gaps.note(g)} for g in gaps.suspects(t)],
             "notice": self.notice,
         }
 

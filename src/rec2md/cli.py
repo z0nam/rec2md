@@ -115,6 +115,11 @@ def run_one(src: Path, args) -> Path:
         log(f"회의 구간 추정 {summary(meta['meeting_bounds'], duration)}")
     if turns is not None and embs and rename:  # 전사된 말이 없으면 화자N도 없어 사이드카를 만들 수 없다
         _voices(t, seg_path, embs, seg_embs, turns, rename, args)
+    from . import gaps
+    if sus := gaps.suspects(t):
+        meta["gap_suspects"] = sus
+        log(f"⚠ 전사 누락 의심 {len(sus)}곳(raw.md에 표시): "
+            + ", ".join(f"{fmt_ts(g['start'])}-{fmt_ts(g['end'])} {gaps.note(g)}" for g in sus))
     t.to_json(seg_path)
     raw_path.write_text(render_raw(t, src.stem), encoding="utf-8")
     if ctx:
@@ -171,16 +176,26 @@ def _min_gap_minutes(v: str) -> float:
 
 def _trim_silence(wav: Path, out: Path, meta: dict, min_gap: float | None = None):
     """긴 무음(녹음기를 안 끈 공백)을 빼고 이어 붙인 wav를 만든다. 자를 게 없으면 (wav, None)."""
-    from . import trim
+    from . import speechcheck, trim
     data = audio.load_wav(wav)
-    p = trim.plan(trim.loudness(data), trim.MIN_GAP if min_gap is None else min_gap)
+    db = trim.loudness(data)
+    # 잘라낼 후보가 있을 때만 VAD를 올린다(대부분의 녹음은 자를 곳이 없다)
+    first = trim.plan(db, trim.MIN_GAP if min_gap is None else min_gap)
+    check = speechcheck.cut_checker(data) if first.trims() else None
+    p = first if check is None else trim.plan(db, first.min_gap, vad=check)
+    if first.trims() and check is None:
+        log("말소리 확인(VAD)을 쓸 수 없어 소리 크기만 보고 자름 — 먼 말소리가 잘릴 수 있음(--no-trim)")
+    if p.speech:
+        log(f"무음 후보 {len(p.speech)}곳은 VAD가 말소리로 들어 자르지 않음: "
+            + ", ".join(f"{fmt_ts(s)}-{fmt_ts(e)}(말소리 {r:.0%})" for s, e, r in p.speech))
     if p.restored:
         log(f"무음 후보 {len(p.restored)}곳은 말소리 구간보다 충분히 조용하지 않아 자르지 않음(임계 {p.threshold:.0f}dB): "
             + ", ".join(f"{fmt_ts(s)}-{fmt_ts(e)}" for s, e in p.restored))
     if not p.trims():
-        if p.restored:  # 자르지 않았어도 판정 근거는 남긴다
+        if p.restored or p.speech:  # 자르지 않았어도 판정 근거는 남긴다
             meta["trim_skipped"] = {"threshold_db": round(p.threshold, 1),
-                                    "restored": [[round(s, 1), round(e, 1)] for s, e in p.restored]}
+                                    "restored": [[round(s, 1), round(e, 1)] for s, e in p.restored],
+                                    "speech": [[round(s, 1), round(e, 1), r] for s, e, r in p.speech]}
         return wav, None
     m = trim.OffsetMap(p.keep)
     audio.write_wav(out, trim.cut_audio(data, p.keep))

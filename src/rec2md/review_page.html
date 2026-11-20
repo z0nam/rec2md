@@ -32,6 +32,8 @@
   .seg { display: grid; grid-template-columns: 36px 1fr; gap: 4px 12px; padding: 10px 8px; border-radius: 10px; }
   .seg.cur { background: var(--hl); }
   .seg.jump { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+  .gap { margin: 8px 0; padding: 8px 12px; border: 1px dashed #d97706; border-radius: 6px; color: #b45309;
+         font-size: 13px; cursor: pointer; background: transparent; text-align: left; width: 100%; }
   .play.waiting { animation: wait 1.2s ease-in-out infinite; }
   @keyframes wait { 50% { box-shadow: 0 0 0 6px var(--hl); } }
   .seg.browse { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -426,7 +428,13 @@ function renderTranscript() {
   main.replaceChildren();
   if (!S.segments.length) { main.append(el("div", { class: "empty" }, "세그먼트가 없음")); return; }
   const frag = document.createDocumentFragment();
+  const gaps = (S.gaps || []).slice();  // 전사 누락 의심 구간: 그 자리에 표식(누르면 거기부터 재생)
   for (const s of S.segments) {
+    while (gaps.length && gaps[0].start < s.end) {
+      const g = gaps.shift();
+      frag.append(el("button", { class: "gap", title: "여기부터 재생", onclick: () => { autoScroll = true; seek(g.start, true); } },
+        `⚠ 전사 누락 의심 ${fmt(g.start)}–${fmt(g.end)} · ${g.note}`));
+    }
     const name = s.name || s.speaker || "";
     const text = el("div", { class: "text", onclick: () => { if (!editing) playSeg(s.i); } });
     if (editing) editable(text, s.i);
